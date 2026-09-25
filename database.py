@@ -72,4 +72,46 @@ def inicializar_base() -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cambios_snapshot (
+                cambio_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL,
+                snapshot_anterior_id INTEGER,
+                id_cita INTEGER NOT NULL,
+                tipo_cambio TEXT NOT NULL,
+                campo TEXT,
+                valor_anterior TEXT,
+                valor_actual TEXT,
+
+                FOREIGN KEY (
+                    snapshot_id
+                )
+                REFERENCES snapshots (
+                    snapshot_id
+                )
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metricas_snapshot (
+                metrica_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL,
+                metrica TEXT NOT NULL,
+                dimension TEXT NOT NULL,
+                segmento TEXT NOT NULL,
+                valor REAL NOT NULL,
+
+                FOREIGN KEY (
+                    snapshot_id
+                )
+                REFERENCES snapshots (
+                    snapshot_id
+                )
+            )
+            """
+        )
+
         conn.commit()

@@ -2,11 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pandas as pd
+
 from config import CLEARMECHANIC_FILE
 from database import (
     get_connection,
     inicializar_base,
 )
+
+from metricas import (
+    guardar_analitica_snapshot,
+    mostrar_resumen_snapshot,
+)
+
 from procesamiento import cargar_clearmechanic
 
 
@@ -29,6 +37,30 @@ def registrar_snapshot() -> int:
     )
 
     fecha_hora_corte = datetime.now()
+
+    def valor_sql(valor):
+        """
+        Convierte valores pandas/numpy a tipos compatibles
+        con SQLite.
+        """
+
+        if pd.isna(valor):
+            return None
+
+        return valor
+
+    def fecha_sql(valor):
+        """
+        Convierte fechas pandas a texto ISO compatible
+        con SQLite.
+        """
+
+        if pd.isna(valor):
+            return None
+
+        return pd.Timestamp(
+            valor
+        ).isoformat()
 
     with get_connection() as conn:
 
@@ -63,41 +95,66 @@ def registrar_snapshot() -> int:
             registros.append(
                 (
                     snapshot_id,
-                    fila.id_cita,
-                    fila.estatus_cita,
-                    fila.motivo_visita,
-                    (
-                        fila.fecha_programada.isoformat()
-                        if fila.fecha_programada
-                        is not None
-                        else None
+
+                    int(
+                        fila.id_cita
                     ),
-                    fila.hora_programada,
-                    fila.origen_cita,
-                    fila.persona_agenda,
-                    (
-                        fila.fecha_creacion.isoformat()
-                        if fila.fecha_creacion
-                        is not None
-                        and not
-                        getattr(
-                            fila.fecha_creacion,
-                            "isnat",
-                            False,
-                        )
-                        else None
+
+                    valor_sql(
+                        fila.estatus_cita
                     ),
-                    fila.nombre,
-                    fila.celular,
-                    fila.asesor_servicio,
-                    fila.modelo,
-                    fila.placa,
+
+                    valor_sql(
+                        fila.motivo_visita
+                    ),
+
+                    fecha_sql(
+                        fila.fecha_programada
+                    ),
+
+                    valor_sql(
+                        fila.hora_programada
+                    ),
+
+                    valor_sql(
+                        fila.origen_cita
+                    ),
+
+                    valor_sql(
+                        fila.persona_agenda
+                    ),
+
+                    fecha_sql(
+                        fila.fecha_creacion
+                    ),
+
+                    valor_sql(
+                        fila.nombre
+                    ),
+
+                    valor_sql(
+                        fila.celular
+                    ),
+
+                    valor_sql(
+                        fila.asesor_servicio
+                    ),
+
+                    valor_sql(
+                        fila.modelo
+                    ),
+
+                    valor_sql(
+                        fila.placa
+                    ),
+
                     (
                         float(
                             fila.kilometraje
                         )
-                        if fila.kilometraje
-                        == fila.kilometraje
+                        if not pd.isna(
+                            fila.kilometraje
+                        )
                         else None
                     ),
                 )
@@ -133,7 +190,6 @@ def registrar_snapshot() -> int:
 
     return snapshot_id
 
-
 def main() -> None:
 
     print()
@@ -151,8 +207,19 @@ def main() -> None:
         f"✅ Snapshot #{snapshot_id} registrado correctamente."
     )
 
-    print()
+    guardar_analitica_snapshot(
+        snapshot_id
+    )
 
+    print(
+        "✅ Deltas e indicadores guardados correctamente."
+    )
+
+    mostrar_resumen_snapshot(
+        snapshot_id
+    )
+
+    print()
 
 if __name__ == "__main__":
     main()
