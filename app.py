@@ -1875,6 +1875,14 @@ fecha_manana = (
     )
 )
 
+fecha_pasado_manana = (
+    fecha_hoy
+    +
+    pd.Timedelta(
+        days=2
+    )
+)
+
 
 # ============================================================
 # CONSTRUIR REPORTES
@@ -1890,21 +1898,20 @@ reporte_manana = construir_reporte_servicios(
     fecha_objetivo=fecha_manana,
 )
 
+reporte_pasado_manana = construir_reporte_servicios(
+    citas=citas_actuales,
+    fecha_objetivo=fecha_pasado_manana,
+)
 
 # ============================================================
 # PESTAÑAS HOY / MAÑANA
 # ============================================================
 
-tab_hoy, tab_manana = st.tabs(
+tab_hoy, tab_manana, tab_pasado_manana = st.tabs(
     [
-        (
-            f"📅 Hoy "
-            f"{fecha_hoy:%d/%m}"
-        ),
-        (
-            f"➡️ Mañana "
-            f"{fecha_manana:%d/%m}"
-        ),
+        f"📅 Hoy {fecha_hoy:%d/%m}",
+        f"➡️ Mañana {fecha_manana:%d/%m}",
+        f"⏩ Pasado mañana {fecha_pasado_manana:%d/%m}",
     ]
 )
 
@@ -1985,6 +1992,44 @@ with tab_manana:
             )
         )
 
+# ============================================================
+# PASADO MAÑANA
+# ============================================================
+
+with tab_pasado_manana:
+
+    st.markdown(
+        (
+            f"#### Citas programadas para "
+            f"{fecha_pasado_manana:%d/%m/%Y}"
+        )
+    )
+
+    mostrar_reporte_operativo(
+        reporte_pasado_manana
+    )
+
+    if not reporte_pasado_manana.empty:
+
+        total_pasado_manana = int(
+            reporte_pasado_manana.loc[
+                reporte_pasado_manana[
+                    "sede"
+                ].eq(
+                    "Total general"
+                ),
+                "Total general",
+            ]
+            .iloc[0]
+        )
+
+        st.caption(
+            (
+                f"Total reporte: "
+                f"{total_pasado_manana:,} citas"
+            )
+        )
+
 
 
 
@@ -2016,10 +2061,21 @@ reporte_canal_manana = construir_reporte_canal_agenda(
     fecha_objetivo=fecha_manana,
 )
 
-tab_canal_hoy, tab_canal_manana = st.tabs(
+reporte_canal_pasado_manana = construir_reporte_canal_agenda(
+    citas=citas_actuales,
+    fecha_objetivo=fecha_pasado_manana,
+)
+
+
+(
+    tab_canal_hoy,
+    tab_canal_manana,
+    tab_canal_pasado_manana,
+) = st.tabs(
     [
         f"📅 Hoy {fecha_hoy:%d/%m}",
         f"➡️ Mañana {fecha_manana:%d/%m}",
+        f"⏩ Pasado mañana {fecha_pasado_manana:%d/%m}",
     ]
 )
 
@@ -2062,7 +2118,26 @@ with tab_canal_manana:
         )
 
 
+with tab_canal_pasado_manana:
 
+    st.markdown(
+        (
+            f"#### Generación de citas para "
+            f"{fecha_pasado_manana:%d/%m/%Y}"
+        )
+    )
+
+    if reporte_canal_pasado_manana.empty:
+
+        st.info(
+            "No existen citas para esta fecha."
+        )
+
+    else:
+
+        mostrar_reporte_canal_agenda(
+            reporte_canal_pasado_manana
+        )
 
 
 
