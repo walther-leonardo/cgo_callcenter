@@ -226,3 +226,7 @@ inbox/
 temp/
 
 .env
+
+browser_profile/
+auth/
+temp/
