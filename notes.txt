@@ -1,0 +1,2 @@
+py -m playwright codegen https://hondapanasanisidro.clearmechanic.com
+py -m playwright codegen --save-storage=auth/clearmechanic.json https://hondapanasanisidro.clearmechanic.com/dashboard/login

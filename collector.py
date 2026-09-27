@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -9,31 +10,40 @@ from database import (
     get_connection,
     inicializar_base,
 )
-
 from metricas import (
     guardar_analitica_snapshot,
     mostrar_resumen_snapshot,
 )
-
 from procesamiento import cargar_clearmechanic
 
 
-def registrar_snapshot() -> int:
+def registrar_snapshot(
+    archivo: str | Path | None = None,
+) -> int:
     """
-    Lee el Excel actual y registra una fotografía completa
-    de ClearMechanic en SQLite.
+    Lee un Excel de ClearMechanic y registra una fotografía
+    completa en SQLite.
+
+    Si no se proporciona archivo, mantiene el flujo manual
+    tradicional usando CLEARMECHANIC_FILE.
     """
 
-    if not CLEARMECHANIC_FILE.exists():
+    ruta_archivo = (
+        Path(archivo)
+        if archivo is not None
+        else CLEARMECHANIC_FILE
+    )
+
+    if not ruta_archivo.exists():
         raise FileNotFoundError(
             "No encontré el archivo:\n"
-            f"{CLEARMECHANIC_FILE}\n\n"
-            "Guarda la exportación como "
-            "'inbox/clearmechanic.xlsx'."
+            f"{ruta_archivo}\n\n"
+            "Verifica que el archivo exista antes de "
+            "registrar el snapshot."
         )
 
     df = cargar_clearmechanic(
-        CLEARMECHANIC_FILE
+        ruta_archivo
     )
 
     fecha_hora_corte = datetime.now()
@@ -77,7 +87,7 @@ def registrar_snapshot() -> int:
                 fecha_hora_corte.isoformat(
                     timespec="seconds"
                 ),
-                CLEARMECHANIC_FILE.name,
+                ruta_archivo.name,
                 len(df),
             ),
         )
@@ -190,6 +200,7 @@ def registrar_snapshot() -> int:
 
     return snapshot_id
 
+
 def main() -> None:
 
     print()
@@ -220,6 +231,7 @@ def main() -> None:
     )
 
     print()
+
 
 if __name__ == "__main__":
     main()

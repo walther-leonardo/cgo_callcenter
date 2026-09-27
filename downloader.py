@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+
 from datetime import date
 from pathlib import Path
 
@@ -18,12 +20,6 @@ from playwright.sync_api import (
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-AUTH_PATH = (
-    PROJECT_ROOT
-    / "auth"
-    / "clearmechanic.json"
-)
-
 TEMP_DIR = (
     PROJECT_ROOT
     / "temp"
@@ -39,6 +35,15 @@ DASHBOARD_URL = (
 
 NOMBRE_REPORTE = "reporte CGO"
 
+BROWSER_PROFILE = (
+    PROJECT_ROOT
+    / "browser_profile"
+)
+
+CUSTOM_REPORTS_URL = (
+    f"{BASE_URL}/dashboard/reports/customreports"
+)
+
 # Durante pruebas lo dejamos visible.
 # Cuando esté estable cambiaremos a True.
 HEADLESS = False
@@ -50,52 +55,60 @@ HEADLESS = False
 
 def validar_configuracion() -> None:
     """
-    Verifica que exista la sesión guardada y prepara temp/.
+    Prepara las carpetas necesarias para la automatización.
     """
-
-    if not AUTH_PATH.exists():
-        raise FileNotFoundError(
-            "No encontré la sesión de ClearMechanic:\n"
-            f"{AUTH_PATH}\n\n"
-            "Debes renovar la sesión con Playwright Codegen."
-        )
 
     TEMP_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
+    BROWSER_PROFILE.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
 def validar_sesion(
     page: Page,
 ) -> None:
     """
-    Detecta si ClearMechanic redirigió nuevamente al login.
+    Comprueba si ClearMechanic mantiene una sesión autenticada.
 
-    No intenta resolver CAPTCHA ni ingresar credenciales.
+    La autenticación se conserva mediante browser_profile/.
+    No utiliza auth/clearmechanic.json.
     """
 
-    esta_en_login = (
-        "/dashboard/login"
-        in page.url
+    url_actual = page.url.lower()
+
+    campo_email = page.locator(
+        '[data-test-id="email__input"]'
     )
 
-    campo_email = (
-        page.locator(
-            '[data-test-id="email__input"]'
-        )
+    campo_password = page.locator(
+        '[data-test-id="password__input"]'
     )
+
+    login_visible = False
+
+    try:
+        login_visible = (
+            campo_email.is_visible()
+            or campo_password.is_visible()
+        )
+    except Exception:
+        login_visible = False
 
     if (
-        esta_en_login
-        or campo_email.is_visible()
+        "/dashboard/login" in url_actual
+        or login_visible
     ):
         raise RuntimeError(
-            "La sesión de ClearMechanic expiró.\n\n"
-            "Debes renovar manualmente "
-            "'auth/clearmechanic.json'."
+            "La sesión de ClearMechanic no está activa.\n\n"
+            "Ejecuta:\n"
+            "    py .\\renovar_sesion.py\n\n"
+            "Haz login manualmente y, cuando estés dentro del "
+            "Dashboard, vuelve a la terminal y presiona ENTER."
         )
-
 
 # ============================================================
 # NAVEGACIÓN
@@ -105,53 +118,36 @@ def abrir_reportes(
     page: Page,
 ) -> None:
     """
-    Navega desde Dashboard hasta Reportes personalizables.
+    Abre directamente la pantalla de Reportes personalizables.
+
+    Evitamos navegar por:
+        Menú > Análisis > Reportes
+
+    porque ya conocemos la URL estable del módulo.
     """
 
     page.goto(
-        DASHBOARD_URL,
+        CUSTOM_REPORTS_URL,
         wait_until="domcontentloaded",
     )
 
     page.wait_for_timeout(
-        1500
+        2000
     )
 
     validar_sesion(
         page
     )
 
-    # --------------------------------------------------------
-    # ANÁLISIS
-    # --------------------------------------------------------
-
-    page.get_by_role(
-        "button",
-        name="Análisis",
-    ).click()
-
-    # --------------------------------------------------------
-    # REPORTES
-    # --------------------------------------------------------
-
-    page.get_by_role(
-        "link",
-        name="Reportes",
-    ).click()
-
-    page.wait_for_load_state(
-        "domcontentloaded"
+    print(
+        f"   URL actual: {page.url}"
     )
 
-    # --------------------------------------------------------
-    # REPORTES PERSONALIZABLES
-    # --------------------------------------------------------
-
-    page.get_by_role(
-        "tab",
-        name="Reportes personalizables",
-    ).click()
-
+    if "/dashboard/reports/customreports" not in page.url:
+        raise RuntimeError(
+            "ClearMechanic no llegó a Reportes personalizables. "
+            f"URL actual: {page.url}"
+        )
 
 # ============================================================
 # FECHAS
@@ -180,21 +176,86 @@ def diferencia_meses(
     )
 
 
+def obtener_boton_visible(
+    locator,
+):
+    """
+    Devuelve el primer elemento visible dentro de un locator.
+    """
+
+    for indice in range(
+        locator.count()
+    ):
+
+        candidato = locator.nth(
+            indice
+        )
+
+        try:
+
+            if candidato.is_visible():
+                return candidato
+
+        except Exception:
+            continue
+
+    return None
+
+
 def seleccionar_dia_calendario(
     page: Page,
     fecha: date,
 ) -> None:
     """
-    Selecciona el número de día visible en el calendario abierto.
+    Selecciona un día dentro del calendario actualmente visible.
     """
 
-    page.get_by_role(
+    calendario_visible = (
+        page.locator('[role="grid"]:visible')
+        .last
+    )
+
+    calendario_visible.wait_for(
+        state="visible",
+        timeout=10_000,
+    )
+
+    candidatos = calendario_visible.get_by_role(
         "gridcell",
-        name=str(
-            fecha.day
-        ),
+        name=str(fecha.day),
         exact=True,
-    ).click()
+    )
+
+    total = candidatos.count()
+
+    if total == 0:
+        raise RuntimeError(
+            f"No se encontró el día {fecha.day} "
+            "en el calendario visible."
+        )
+
+    # Elegimos la primera celda visible y habilitada.
+    for indice in range(total):
+
+        candidato = candidatos.nth(
+            indice
+        )
+
+        try:
+
+            if (
+                candidato.is_visible()
+                and candidato.is_enabled()
+            ):
+                candidato.click()
+                return
+
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        f"No se pudo seleccionar el día {fecha.day}."
+    )
 
 
 def seleccionar_fecha_inicio(
@@ -202,7 +263,7 @@ def seleccionar_fecha_inicio(
     fecha_inicio: date,
 ) -> None:
     """
-    Configura la fecha inicial.
+    Selecciona la fecha inicial.
     """
 
     boton_inicio = (
@@ -215,9 +276,9 @@ def seleccionar_fecha_inicio(
 
     boton_inicio.click()
 
-    # En nuestra automatización inicial la fecha de inicio
-    # será el día actual, por lo que normalmente no debemos
-    # cambiar de mes.
+    page.wait_for_timeout(
+        300
+    )
 
     seleccionar_dia_calendario(
         page=page,
@@ -231,7 +292,9 @@ def seleccionar_fecha_fin(
     fecha_fin: date,
 ) -> None:
     """
-    Configura la fecha final y navega por meses si es necesario.
+    Selecciona la fecha final.
+
+    Navega por meses usando únicamente el calendario visible.
     """
 
     boton_fin = (
@@ -244,6 +307,10 @@ def seleccionar_fecha_fin(
 
     boton_fin.click()
 
+    page.wait_for_timeout(
+        300
+    )
+
     meses = diferencia_meses(
         fecha_origen=fecha_inicio,
         fecha_destino=fecha_fin,
@@ -251,25 +318,59 @@ def seleccionar_fecha_fin(
 
     if meses > 0:
 
-        for _ in range(
-            meses
-        ):
-            page.get_by_role(
-                "button",
-                name="Next month",
-            ).click()
+        for _ in range(meses):
+
+            botones_siguiente = (
+                page.get_by_role(
+                    "button",
+                    name="Next month",
+                )
+            )
+
+            boton_siguiente = obtener_boton_visible(
+                botones_siguiente
+            )
+
+            if boton_siguiente is None:
+                raise RuntimeError(
+                    "No se encontró el botón visible "
+                    "'Next month'."
+                )
+
+            boton_siguiente.click()
+
+            page.wait_for_timeout(
+                250
+            )
 
     elif meses < 0:
 
         for _ in range(
-            abs(
-                meses
-            )
+            abs(meses)
         ):
-            page.get_by_role(
-                "button",
-                name="Previous month",
-            ).click()
+
+            botones_anterior = (
+                page.get_by_role(
+                    "button",
+                    name="Previous month",
+                )
+            )
+
+            boton_anterior = obtener_boton_visible(
+                botones_anterior
+            )
+
+            if boton_anterior is None:
+                raise RuntimeError(
+                    "No se encontró el botón visible "
+                    "'Previous month'."
+                )
+
+            boton_anterior.click()
+
+            page.wait_for_timeout(
+                250
+            )
 
     seleccionar_dia_calendario(
         page=page,
@@ -285,19 +386,70 @@ def abrir_reporte_cgo(
     page: Page,
 ) -> None:
     """
-    Abre el reporte personalizable utilizado por CGO.
+    Selecciona el reporte personalizable utilizado por CGO.
+
+    Evitamos buscar simplemente un botón llamado "Open",
+    porque Material UI utiliza ese texto también en algunos
+    controles internos del calendario.
     """
 
-    page.get_by_role(
-        "button",
-        name="Open",
-    ).click()
+    # ========================================================
+    # ABRIR SELECTOR DE REPORTES
+    # ========================================================
 
-    page.get_by_text(
+    boton_selector = page.locator(
+        'button[title="Open"]'
+    )
+
+    boton_selector.wait_for(
+        state="visible",
+        timeout=10_000,
+    )
+
+    boton_selector.click()
+
+    page.wait_for_timeout(
+        300
+    )
+
+    # ========================================================
+    # SELECCIONAR "reporte CGO"
+    # ========================================================
+
+    opcion_reporte = page.get_by_text(
         NOMBRE_REPORTE,
         exact=True,
-    ).click()
+    )
 
+    opcion_reporte.wait_for(
+        state="visible",
+        timeout=10_000,
+    )
+
+    opcion_reporte.click()
+
+    page.wait_for_timeout(
+        700
+    )
+
+    # ========================================================
+    # VALIDAR QUE EL REPORTE QUEDÓ SELECCIONADO
+    # ========================================================
+
+    boton_descarga = page.get_by_role(
+        "button",
+        name="Descargar reporte",
+        exact=True,
+    )
+
+    boton_descarga.wait_for(
+        state="visible",
+        timeout=15_000,
+    )
+
+    print(
+        f"   Reporte seleccionado: {NOMBRE_REPORTE}"
+    )
 
 # ============================================================
 # DESCARGA
@@ -307,48 +459,88 @@ def descargar_reporte(
     page: Page,
 ) -> Path:
     """
-    Descarga el Excel y lo guarda temporalmente.
+    Diagnostica la descarga generada por ClearMechanic.
 
-    Devuelve la ruta local del archivo.
+    Captura inmediatamente la URL real asociada al evento
+    Download, sin esperar a que Playwright termine o guarde
+    el archivo.
     """
+
+    context = page.context
+
+    print(
+        f"   Página antes de descargar: "
+        f"{'ABIERTA' if not page.is_closed() else 'CERRADA'}"
+    )
+
+    def al_cerrar_pagina() -> None:
+        print(
+            "   ⚠️ EVENTO: ClearMechanic cerró la página."
+        )
+
+    def al_cerrar_contexto() -> None:
+        print(
+            "   ⚠️ EVENTO: Se cerró el contexto del navegador."
+        )
+
+    page.on(
+        "close",
+        al_cerrar_pagina,
+    )
+
+    context.on(
+        "close",
+        al_cerrar_contexto,
+    )
+
+    boton_descarga = page.get_by_role(
+        "button",
+        name="Descargar reporte",
+        exact=True,
+    )
+
+    boton_descarga.wait_for(
+        state="visible",
+        timeout=15_000,
+    )
+
+    print(
+        "   Click en Descargar reporte..."
+    )
 
     with page.expect_download(
         timeout=60_000
     ) as download_info:
 
-        page.get_by_role(
-            "button",
-            name="Descargar reporte",
-        ).click()
+        boton_descarga.click()
 
-    download = (
-        download_info.value
+    download = download_info.value
+
+    print(
+        "   ✅ Evento Download recibido."
     )
 
-    timestamp = (
-        date.today()
-        .strftime(
-            "%Y%m%d"
-        )
-    )
-
-    nombre_archivo = (
-        f"clearmechanic_{timestamp}_"
+    print(
+        f"   Nombre sugerido: "
         f"{download.suggested_filename}"
     )
 
-    ruta = (
-        TEMP_DIR
-        /
-        nombre_archivo
+    print(
+        "   URL real de descarga:"
     )
 
-    download.save_as(
-        ruta
+    print(
+        f"   {download.url}"
     )
 
-    return ruta
-
+    # Esta ejecución es deliberadamente diagnóstica.
+    # No esperamos download.path(), failure() ni save_as(),
+    # porque sabemos que Chromium está cerrándose durante
+    # esa fase.
+    raise RuntimeError(
+        "Diagnóstico completado. "
+        "Se capturó la URL real de descarga."
+    )
 
 # ============================================================
 # ORQUESTADOR
@@ -394,26 +586,41 @@ def descargar_clearmechanic(
         f"{fecha_fin:%d/%m/%Y}"
     )
 
+    print(
+        f"Perfil usado por downloader: "
+        f"{BROWSER_PROFILE.resolve()}"
+    )
+
     with sync_playwright() as playwright:
 
-        browser = (
-            playwright.chromium.launch(
-                headless=HEADLESS
-            )
-        )
-
-        context: BrowserContext = (
-            browser.new_context(
-                storage_state=str(
-                    AUTH_PATH
+        context = (
+            playwright.chromium.launch_persistent_context(
+                user_data_dir=str(
+                    BROWSER_PROFILE
                 ),
+                headless=HEADLESS,
                 accept_downloads=True,
+                viewport=None,
+                args=(
+                    [
+                        "--start-maximized",
+                        "--disable-save-password-bubble",
+                        "--password-store=basic",
+                        "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+                    ]
+                    if not HEADLESS
+                    else []
+                ),
             )
         )
 
-        page = (
-            context.new_page()
-        )
+        if context.pages:
+
+            page = context.pages[0]
+
+        else:
+
+            page = context.new_page()
 
         try:
 
@@ -480,8 +687,6 @@ def descargar_clearmechanic(
         finally:
 
             context.close()
-            browser.close()
-
 
 # ============================================================
 # EJECUCIÓN MANUAL
