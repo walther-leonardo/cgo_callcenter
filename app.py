@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from streamlit_autorefresh import st_autorefresh
 from database import get_connection
 
 from reportes import (
@@ -26,10 +27,21 @@ st.set_page_config(
     layout="wide",
 )
 
+# ============================================================
+# ACTUALIZACIÓN AUTOMÁTICA DE LA TORRE
+# ============================================================
+
+st_autorefresh(
+    interval=30_000,
+    key="cgo_callcenter_autorefresh",
+)
+
+
 AGENTES_CALLCENTER = [
     "Brenda Montalvan Cornejo",
     "Rocio Miranda Ausejo",
 ]
+
 
 
 # ============================================================
@@ -66,7 +78,7 @@ def aplicar_estilos_compactos() -> None:
             background-color: rgba(250, 250, 250, 0.60);
             border: 1px solid rgba(49, 51, 63, 0.12);
             border-radius: 9px;
-            padding: 0.55rem 0.70rem;
+            padding: 0.40rem 0.55rem;
         }
 
         div[data-testid="stMetricLabel"] {
@@ -947,6 +959,74 @@ def construir_ritmo_intradia(
         )
     )
 
+def construir_ritmo_origen(
+    snapshots: pd.DataFrame,
+    metricas: pd.DataFrame,
+    fecha_objetivo,
+) -> pd.DataFrame:
+    """
+    Construye la evolución acumulada de citas nuevas del día
+    clasificadas como ENTRANTE / SALIENTE.
+    """
+
+    snapshots_dia = obtener_snapshots_dia(
+        snapshots=snapshots,
+        fecha_objetivo=fecha_objetivo,
+    )
+
+    if snapshots_dia.empty:
+        return pd.DataFrame()
+
+    filas = []
+
+    for snapshot in snapshots_dia.itertuples(
+        index=False
+    ):
+
+        snapshot_id = int(
+            snapshot.snapshot_id
+        )
+
+        filas.append(
+            {
+                "snapshot_id":
+                    snapshot_id,
+
+                "fecha_hora_corte":
+                    snapshot.fecha_hora_corte,
+
+                "ENTRANTE":
+                    obtener_valor(
+                        metricas=metricas,
+                        snapshot_id=snapshot_id,
+                        metrica="NUEVAS_DESDE_INICIO_DIA",
+                        dimension="ORIGEN",
+                        segmento="ENTRANTE",
+                    ),
+
+                "SALIENTE":
+                    obtener_valor(
+                        metricas=metricas,
+                        snapshot_id=snapshot_id,
+                        metrica="NUEVAS_DESDE_INICIO_DIA",
+                        dimension="ORIGEN",
+                        segmento="SALIENTE",
+                    ),
+            }
+        )
+
+    return (
+        pd.DataFrame(
+            filas
+        )
+        .sort_values(
+            "fecha_hora_corte"
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
 # ============================================================
 # HELPERS — GRÁFICO
 # ============================================================
@@ -1280,57 +1360,58 @@ if snapshot_previo is not None:
 
 
 # ============================================================
-# ENCABEZADO
+# BLOQUE PRINCIPAL — RESUMEN + GRÁFICOS
 # ============================================================
 
-st.title(
-    "CGO — Call Center"
-)
-
-st.caption(
-    (
-        "Seguimiento intradía de generación "
-        "y cobertura de citas."
-    )
-)
-
-st.caption(
-    (
-        f"Último corte: "
-        f"{fecha_actual:%d/%m/%Y %H:%M}"
-    )
-)
-
-
-# ============================================================
-# BLOQUE PRINCIPAL — KPI + GRÁFICO
-# ============================================================
-
-col_resumen, col_grafico = st.columns(
+col_resumen, col_graficos = st.columns(
     [
         0.95,
-        1.55,
+        1.25,
     ],
     gap="large",
 )
 
 
-# ------------------------------------------------------------
-# COLUMNA IZQUIERDA
-# ------------------------------------------------------------
+# ============================================================
+# COLUMNA IZQUIERDA — RESUMEN EJECUTIVO
+# ============================================================
 
 with col_resumen:
 
-    # ========================================================
+    # --------------------------------------------------------
+    # ENCABEZADO
+    # --------------------------------------------------------
+
+    st.title(
+        "CGO — Call Center"
+    )
+
+    st.caption(
+        (
+            "Seguimiento intradía de generación "
+            "y cobertura de citas."
+        )
+    )
+
+    st.caption(
+        (
+            f"Último corte: "
+            f"{fecha_actual:%d/%m/%Y %H:%M}"
+        )
+    )
+
+
+    # --------------------------------------------------------
     # AGENDA ACTUAL
-    # ========================================================
+    # --------------------------------------------------------
 
     st.subheader(
         "Agenda actual"
     )
 
-    a1, a2, a3 = (
-        st.columns(3)
+    a1, a2, a3 = st.columns(
+        3,
+        gap="small",
     )
 
     a1.metric(
@@ -1344,20 +1425,22 @@ with col_resumen:
     )
 
     a3.metric(
-        "D+2 o más",
+        "Pasado mañana y prox. días",
         f"{int(agenda_futura):,}",
     )
 
-    # ========================================================
-    # CONSTRUCCIÓN
-    # ========================================================
+
+    # --------------------------------------------------------
+    # CONSTRUCCIÓN DE AGENDA
+    # --------------------------------------------------------
 
     st.subheader(
         "Construcción de agenda"
     )
 
-    c1, c2, c3 = (
-        st.columns(3)
+    c1, c2, c3 = st.columns(
+        3,
+        gap="small",
     )
 
     c1.metric(
@@ -1371,13 +1454,14 @@ with col_resumen:
     )
 
     c3.metric(
-        "D+2 o más",
+        "Pasado mañana y prox. días",
         f"+{int(inicio_futuro):,}",
     )
 
-    # ========================================================
+
+    # --------------------------------------------------------
     # ÚLTIMO CORTE
-    # ========================================================
+    # --------------------------------------------------------
 
     st.subheader(
         "Último corte"
@@ -1398,12 +1482,14 @@ with col_resumen:
             unsafe_allow_html=True,
         )
 
-    u1, u2 = (
-        st.columns(2)
+    u1, u2 = st.columns(
+        2,
+        gap="small",
     )
 
-    u3, u4 = (
-        st.columns(2)
+    u3, u4 = st.columns(
+        2,
+        gap="small",
     )
 
     u1.metric(
@@ -1422,16 +1508,20 @@ with col_resumen:
     )
 
     u4.metric(
-        "D+2 o más",
+        "Pasado mañana y prox. días",
         f"+{int(ultimo_futuro):,}",
     )
 
 
-# ------------------------------------------------------------
-# COLUMNA DERECHA — GRÁFICO
-# ------------------------------------------------------------
+# ============================================================
+# COLUMNA DERECHA — GRÁFICOS
+# ============================================================
 
-with col_grafico:
+with col_graficos:
+
+    # --------------------------------------------------------
+    # AGENDA EN CONSTRUCCIÓN
+    # --------------------------------------------------------
 
     st.subheader(
         "Agenda en construcción"
@@ -1444,26 +1534,151 @@ with col_grafico:
         )
     )
 
-    comparativo = (
-        construir_comparativo_agenda(
-            snapshot_inicio=
-                snapshot_inicio,
-            snapshot_actual=
-                snapshot_actual,
-        )
+    comparativo = construir_comparativo_agenda(
+        snapshot_inicio=snapshot_inicio,
+        snapshot_actual=snapshot_actual,
     )
 
     figura = construir_grafico_agenda(
-        comparativo=
-            comparativo,
-        fecha_dia=
-            fecha_dia,
+        comparativo=comparativo,
+        fecha_dia=fecha_dia,
+    )
+
+    # Más compacto para compartir la columna derecha.
+    figura.update_layout(
+        height=315,
+        margin=dict(
+            l=10,
+            r=10,
+            t=15,
+            b=10,
+        ),
     )
 
     st.plotly_chart(
         figura,
         use_container_width=True,
     )
+
+
+    # --------------------------------------------------------
+    # SEPARACIÓN VISUAL
+    # --------------------------------------------------------
+
+    st.markdown(
+        "<hr style='margin: 0.15rem 0 0.35rem 0;'>",
+        unsafe_allow_html=True,
+    )
+
+
+    # --------------------------------------------------------
+    # CONSTRUCCIÓN DE CITAS POR ORIGEN
+    # --------------------------------------------------------
+
+    st.subheader(
+        "Construcción de citas por origen"
+    )
+
+    st.caption(
+        (
+            "Evolución acumulada de las citas generadas "
+            "durante el día según su origen declarado."
+        )
+    )
+
+    ritmo_origen = construir_ritmo_origen(
+        snapshots=snapshots,
+        metricas=metricas,
+        fecha_objetivo=fecha_dia,
+    )
+
+    if ritmo_origen.empty:
+
+        st.info(
+            "Todavía no existen datos de origen para el día."
+        )
+
+    else:
+
+        figura_origen = go.Figure()
+
+        figura_origen.add_trace(
+            go.Scatter(
+                x=ritmo_origen[
+                    "fecha_hora_corte"
+                ],
+                y=ritmo_origen[
+                    "ENTRANTE"
+                ],
+                mode="lines+markers",
+                name="Entrantes",
+                line=dict(
+                    color="#1A73E8",
+                    width=3,
+                ),
+                marker=dict(
+                    size=6,
+                ),
+            )
+        )
+
+        figura_origen.add_trace(
+            go.Scatter(
+                x=ritmo_origen[
+                    "fecha_hora_corte"
+                ],
+                y=ritmo_origen[
+                    "SALIENTE"
+                ],
+                mode="lines+markers",
+                name="Salientes",
+                line=dict(
+                    color="#F9AB00",
+                    width=3,
+                ),
+                marker=dict(
+                    size=6,
+                ),
+            )
+        )
+
+        figura_origen.update_xaxes(
+            tickformat="%H:%M",
+            title="",
+        )
+
+        figura_origen.update_yaxes(
+            title="Citas nuevas acumuladas",
+            rangemode="tozero",
+            nticks=5,
+        )
+
+        figura_origen.update_layout(
+            height=285,
+            hovermode="x unified",
+            legend_title_text="",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+            ),
+            margin=dict(
+                l=10,
+                r=10,
+                t=10,
+                b=10,
+            ),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+
+        st.plotly_chart(
+            figura_origen,
+            use_container_width=True,
+        )
+
 
 
 # ============================================================
@@ -1580,7 +1795,7 @@ with col_agentes:
                         manana_dia
                     ),
 
-                "D+2 o más":
+                "Pasado mañana y prox. días":
                     int(
                         futuro_dia
                     ),

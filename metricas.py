@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from clasificaciones import clasificar_sentido_origen
 from database import get_connection
 
 
@@ -15,6 +16,10 @@ BUCKETS_PRINCIPALES = [
     "PASADO_MANANA_O_MAS",
 ]
 
+ORIGENES_CITA = [
+    "ENTRANTE",
+    "SALIENTE",
+]
 
 def preparar_citas(
     df: pd.DataFrame,
@@ -608,6 +613,63 @@ def guardar_metricas_agente_bucket(
             valor=fila.valor,
         )
 
+
+def guardar_metricas_origen(
+    metricas: list[dict],
+    df: pd.DataFrame,
+    nombre_metrica: str,
+) -> None:
+    """
+    Guarda el volumen de citas segmentado por origen:
+    ENTRANTE / SALIENTE.
+    """
+
+    if df.empty:
+
+        for origen in ORIGENES_CITA:
+
+            agregar_metrica(
+                metricas=metricas,
+                metrica=nombre_metrica,
+                dimension="ORIGEN",
+                segmento=origen,
+                valor=0,
+            )
+
+        return
+
+    base = df.copy()
+
+    base[
+        "sentido_origen"
+    ] = base[
+        "origen_cita"
+    ].apply(
+        clasificar_sentido_origen
+    )
+
+    conteo = (
+        base[
+            "sentido_origen"
+        ]
+        .value_counts()
+        .to_dict()
+    )
+
+    for origen in ORIGENES_CITA:
+
+        agregar_metrica(
+            metricas=metricas,
+            metrica=nombre_metrica,
+            dimension="ORIGEN",
+            segmento=origen,
+            valor=conteo.get(
+                origen,
+                0,
+            ),
+        )
+
+
 # ============================================================
 # PERSISTENCIA ANALÍTICA
 # ============================================================
@@ -912,6 +974,12 @@ def guardar_analitica_snapshot(
     )
 
     guardar_metricas_agente_bucket(
+        metricas=metricas,
+        df=nuevas_dia,
+        nombre_metrica="NUEVAS_DESDE_INICIO_DIA",
+    )
+
+    guardar_metricas_origen(
         metricas=metricas,
         df=nuevas_dia,
         nombre_metrica="NUEVAS_DESDE_INICIO_DIA",

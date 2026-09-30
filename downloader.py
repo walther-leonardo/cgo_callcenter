@@ -5,9 +5,12 @@ import shutil
 from datetime import date
 from pathlib import Path
 
+import requests
+
 from dateutil.relativedelta import relativedelta
 from playwright.sync_api import (
     BrowserContext,
+    Error as PlaywrightError,
     Page,
     TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
@@ -459,11 +462,12 @@ def descargar_reporte(
     page: Page,
 ) -> Path:
     """
-    Diagnostica la descarga generada por ClearMechanic.
+    Genera el reporte en ClearMechanic y descarga el Excel
+    directamente desde la URL firmada entregada por el servidor.
 
-    Captura inmediatamente la URL real asociada al evento
-    Download, sin esperar a que Playwright termine o guarde
-    el archivo.
+    La descarga HTTP queda desacoplada de Chromium, por lo que
+    puede completarse aunque ClearMechanic cierre la página o
+    el contexto del navegador después de generar el archivo.
     """
 
     context = page.context
@@ -516,31 +520,100 @@ def descargar_reporte(
 
     download = download_info.value
 
+    nombre_archivo = (
+        download.suggested_filename
+    )
+
+    url_descarga = (
+        download.url
+    )
+
     print(
         "   ✅ Evento Download recibido."
     )
 
     print(
         f"   Nombre sugerido: "
-        f"{download.suggested_filename}"
+        f"{nombre_archivo}"
+    )
+
+    if not url_descarga:
+        raise RuntimeError(
+            "ClearMechanic generó el evento de descarga, "
+            "pero no proporcionó una URL válida."
+        )
+
+    print(
+        "   ✅ URL de descarga capturada."
+    )
+
+    ruta_destino = (
+        TEMP_DIR
+        / nombre_archivo
     )
 
     print(
-        "   URL real de descarga:"
+        "   🔄 Descargando archivo desde AWS..."
+    )
+
+    try:
+
+        with requests.get(
+            url_descarga,
+            stream=True,
+            timeout=(15, 120),
+        ) as response:
+
+            response.raise_for_status()
+
+            with ruta_destino.open(
+                "wb"
+            ) as archivo:
+
+                for bloque in response.iter_content(
+                    chunk_size=1024 * 1024
+                ):
+
+                    if bloque:
+                        archivo.write(
+                            bloque
+                        )
+
+    except Exception:
+
+        if ruta_destino.exists():
+            ruta_destino.unlink()
+
+        raise
+
+    if (
+        not ruta_destino.exists()
+        or ruta_destino.stat().st_size == 0
+    ):
+        raise RuntimeError(
+            "La descarga terminó, pero el archivo resultante "
+            "no existe o está vacío."
+        )
+
+    tamano_mb = (
+        ruta_destino.stat().st_size
+        /
+        (1024 * 1024)
     )
 
     print(
-        f"   {download.url}"
+        f"   ✅ Archivo descargado correctamente."
     )
 
-    # Esta ejecución es deliberadamente diagnóstica.
-    # No esperamos download.path(), failure() ni save_as(),
-    # porque sabemos que Chromium está cerrándose durante
-    # esa fase.
-    raise RuntimeError(
-        "Diagnóstico completado. "
-        "Se capturó la URL real de descarga."
+    print(
+        f"   Ruta: {ruta_destino}"
     )
+
+    print(
+        f"   Tamaño: {tamano_mb:.2f} MB"
+    )
+
+    return ruta_destino
 
 # ============================================================
 # ORQUESTADOR
@@ -686,7 +759,13 @@ def descargar_clearmechanic(
 
         finally:
 
-            context.close()
+            try:
+                context.close()
+
+            except PlaywrightError as exc:
+
+                if "Target page, context or browser has been closed" not in str(exc):
+                    raise
 
 # ============================================================
 # EJECUCIÓN MANUAL

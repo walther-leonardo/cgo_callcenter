@@ -245,6 +245,26 @@ def normalizar_texto(
         .upper()
     )
 
+def clasificar_sentido_origen(
+    origen,
+) -> str:
+    """
+    Clasifica ORIGEN DE CITA en ENTRANTE o SALIENTE.
+
+    Regla de negocio:
+    - Si contiene 'saliente' → SALIENTE.
+    - Cualquier otro valor → ENTRANTE.
+    - Vacío o nulo → ENTRANTE.
+    """
+
+    texto = normalizar_texto(
+        origen
+    )
+
+    if "SALIENTE" in texto:
+        return "SALIENTE"
+
+    return "ENTRANTE"
 
 def clasificar_sede(
     asesor,
@@ -265,18 +285,15 @@ def clasificar_sede(
         "INDETERMINADO",
     )
 
-
-def clasificar_servicio(
-    motivo,
+def _clasificar_motivo_individual(
+    motivo: str,
 ) -> tuple[str, str]:
     """
-    Clasifica MOTIVO DE VISITA en:
+    Clasifica un único motivo de visita.
 
-        tipo_facturacion
-        tipo_servicio
-
-    Si no encuentra una regla conocida:
-        INDETERMINADO / INDETERMINADO
+    Dentro de un mismo motivo se conserva el orden de
+    REGLAS_SERVICIO. Esto permite, por ejemplo, que
+    'Preventivo - 01K servicio' siga clasificándose como 01K.
     """
 
     texto = normalizar_texto(
@@ -314,6 +331,69 @@ def clasificar_servicio(
         "INDETERMINADO",
         "INDETERMINADO",
     )
+
+
+def clasificar_servicio(
+    motivo,
+) -> tuple[str, str]:
+    """
+    Clasifica MOTIVO DE VISITA.
+
+    Si una cita contiene varios motivos:
+    1. Se clasifica cada motivo individualmente.
+    2. Si al menos uno es FACTURABLE, se prioriza.
+    3. Si ninguno es facturable, se conserva el primer
+       motivo reconocido.
+    """
+
+    texto = normalizar_texto(
+        motivo
+    )
+
+    if not texto:
+        return (
+            "INDETERMINADO",
+            "INDETERMINADO",
+        )
+
+    motivos = [
+        fragmento.strip()
+        for fragmento
+        in re.split(
+            r"[,;\n]+",
+            texto,
+        )
+        if fragmento.strip()
+    ]
+
+    clasificaciones = [
+        _clasificar_motivo_individual(
+            fragmento
+        )
+        for fragmento
+        in motivos
+    ]
+
+    reconocidas = [
+        resultado
+        for resultado
+        in clasificaciones
+        if resultado[0]
+        != "INDETERMINADO"
+    ]
+
+    if not reconocidas:
+
+        return _clasificar_motivo_individual(
+            texto
+        )
+
+    for resultado in reconocidas:
+
+        if resultado[0] == "FACTURABLE":
+            return resultado
+
+    return reconocidas[0]
 
 
 def enriquecer_clasificaciones(
