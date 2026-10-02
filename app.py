@@ -15,7 +15,12 @@ from reportes import (
     construir_reporte_servicios,
 )
 
-
+from cloudtalk_dashboard import (
+    construir_kpis_cloudtalk,
+    construir_timeline_cloudtalk,
+    formatear_delta_duracion,
+    formatear_duracion_kpi,
+)
 
 # ============================================================
 # CONFIGURACIÓN
@@ -1678,6 +1683,158 @@ with col_graficos:
             figura_origen,
             use_container_width=True,
         )
+
+# ============================================================
+# CLOUDTALK — ACTIVIDAD OPERATIVA
+# ============================================================
+
+st.divider()
+
+st.subheader(
+    "Actividad del Call Center"
+)
+
+hora_corte_cloudtalk = (
+    fecha_actual.time()
+)
+
+kpis_cloudtalk = (
+    construir_kpis_cloudtalk(
+        fecha_objetivo=fecha_dia,
+        hora_corte=hora_corte_cloudtalk,
+    )
+)
+
+col_cloudtalk_kpi, col_cloudtalk_timeline = (
+    st.columns(
+        [
+            0.95,
+            1.55,
+        ],
+        gap="large",
+    )
+)
+
+
+# ------------------------------------------------------------
+# KPI CLOUDTALK
+# ------------------------------------------------------------
+
+with col_cloudtalk_kpi:
+
+    st.caption(
+        (
+            "Comparativo vs ayer "
+            f"al mismo corte: "
+            f"{hora_corte_cloudtalk:%H:%M}."
+        )
+    )
+
+    for fila in kpis_cloudtalk.itertuples(
+        index=False
+    ):
+
+        st.markdown(
+            f"**{fila.agente}**"
+        )
+
+        k1, k2 = (
+            st.columns(2)
+        )
+
+        k3, k4 = (
+            st.columns(2)
+        )
+
+        delta_entrantes = (
+            fila.entrantes_hoy
+            -
+            fila.entrantes_ayer
+        )
+
+        delta_salientes = (
+            fila.salientes_hoy
+            -
+            fila.salientes_ayer
+        )
+
+        delta_conectadas = (
+            fila.conectadas_hoy
+            -
+            fila.conectadas_ayer
+        )
+
+        delta_duracion = (
+            fila.duracion_hoy
+            -
+            fila.duracion_ayer
+        )
+
+        k1.metric(
+            "Entrantes atendidas",
+            f"{fila.entrantes_hoy:,}",
+            delta=(
+                f"{delta_entrantes:+,}"
+            ),
+        )
+
+        k2.metric(
+            "Salientes realizadas",
+            f"{fila.salientes_hoy:,}",
+            delta=(
+                f"{delta_salientes:+,}"
+            ),
+        )
+
+        k3.metric(
+            "Salientes conectadas",
+            f"{fila.conectadas_hoy:,}",
+            delta=(
+                f"{delta_conectadas:+,}"
+            ),
+        )
+
+        k4.metric(
+            "Tiempo conectado",
+            formatear_duracion_kpi(
+                fila.duracion_hoy
+            ),
+            delta=(
+                formatear_delta_duracion(
+                    delta_duracion
+                )
+            ),
+        )
+
+
+# ------------------------------------------------------------
+# TIMELINE CLOUDTALK
+# ------------------------------------------------------------
+
+with col_cloudtalk_timeline:
+
+    figura_cloudtalk = (
+        construir_timeline_cloudtalk(
+            fecha_dia
+        )
+    )
+
+    # El título ya lo aporta Streamlit.
+    figura_cloudtalk.update_layout(
+        title=None,
+        height=390,
+        margin=dict(
+            l=20,
+            r=10,
+            t=45,
+            b=25,
+        ),
+    )
+
+    st.plotly_chart(
+        figura_cloudtalk,
+        use_container_width=True,
+    )
 
 
 

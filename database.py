@@ -114,4 +114,259 @@ def inicializar_base() -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cloudtalk_llamadas (
+                id_evento TEXT PRIMARY KEY,
+
+                fecha TEXT NOT NULL,
+                hora TEXT NOT NULL,
+                fecha_hora TEXT NOT NULL,
+
+                tipo_llamada TEXT NOT NULL,
+                direccion TEXT NOT NULL,
+                estado TEXT NOT NULL,
+
+                duracion TEXT,
+                duracion_segundos INTEGER NOT NULL,
+
+                contacto TEXT,
+                telefono_contacto TEXT,
+
+                agente TEXT,
+                canal_agente TEXT,
+                telefono_agente TEXT,
+
+                fecha_primera_carga TEXT NOT NULL,
+                fecha_ultima_carga TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_cloudtalk_fecha_hora
+            ON cloudtalk_llamadas (
+                fecha_hora
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_cloudtalk_agente_fecha
+            ON cloudtalk_llamadas (
+                agente,
+                fecha
+            )
+            """
+        )
+        
         conn.commit()
+
+
+def guardar_llamadas_cloudtalk(
+    llamadas,
+) -> tuple[int, int]:
+    """
+    Inserta o sincroniza llamadas provenientes de CloudTalk.
+
+    Usa id_evento como clave estable.
+
+    Devuelve:
+        (nuevas, sincronizadas)
+    """
+
+    if llamadas.empty:
+        return 0, 0
+
+    columnas = [
+        "id_evento",
+        "fecha",
+        "hora",
+        "fecha_hora",
+        "tipo_llamada",
+        "direccion",
+        "estado",
+        "duracion",
+        "duracion_segundos",
+        "contacto",
+        "telefono_contacto",
+        "agente",
+        "canal_agente",
+        "telefono_agente",
+        "fecha_primera_carga",
+        "fecha_ultima_carga",
+    ]
+
+    faltantes = [
+        columna
+        for columna in columnas
+        if columna not in llamadas.columns
+    ]
+
+    if faltantes:
+        raise ValueError(
+            "Faltan columnas para guardar CloudTalk: "
+            f"{faltantes}"
+        )
+
+    registros = (
+        llamadas[
+            columnas
+        ]
+        .where(
+            llamadas[
+                columnas
+            ].notna(),
+            None,
+        )
+        .to_dict(
+            orient="records"
+        )
+    )
+
+    ids_evento = [
+        registro[
+            "id_evento"
+        ]
+        for registro in registros
+    ]
+
+    nuevas = 0
+
+    with get_connection() as conn:
+
+        if ids_evento:
+
+            placeholders = ",".join(
+                "?"
+                for _ in ids_evento
+            )
+
+            existentes = conn.execute(
+                f"""
+                SELECT id_evento
+                FROM cloudtalk_llamadas
+                WHERE id_evento IN (
+                    {placeholders}
+                )
+                """,
+                ids_evento,
+            ).fetchall()
+
+            ids_existentes = {
+                fila[0]
+                for fila in existentes
+            }
+
+            nuevas = sum(
+                id_evento
+                not in ids_existentes
+                for id_evento in ids_evento
+            )
+
+        conn.executemany(
+            """
+            INSERT INTO cloudtalk_llamadas (
+                id_evento,
+                fecha,
+                hora,
+                fecha_hora,
+                tipo_llamada,
+                direccion,
+                estado,
+                duracion,
+                duracion_segundos,
+                contacto,
+                telefono_contacto,
+                agente,
+                canal_agente,
+                telefono_agente,
+                fecha_primera_carga,
+                fecha_ultima_carga
+            )
+            VALUES (
+                :id_evento,
+                :fecha,
+                :hora,
+                :fecha_hora,
+                :tipo_llamada,
+                :direccion,
+                :estado,
+                :duracion,
+                :duracion_segundos,
+                :contacto,
+                :telefono_contacto,
+                :agente,
+                :canal_agente,
+                :telefono_agente,
+                :fecha_primera_carga,
+                :fecha_ultima_carga
+            )
+
+            ON CONFLICT (
+                id_evento
+            )
+
+            DO UPDATE SET
+                fecha =
+                    excluded.fecha,
+
+                hora =
+                    excluded.hora,
+
+                fecha_hora =
+                    excluded.fecha_hora,
+
+                tipo_llamada =
+                    excluded.tipo_llamada,
+
+                direccion =
+                    excluded.direccion,
+
+                estado =
+                    excluded.estado,
+
+                duracion =
+                    excluded.duracion,
+
+                duracion_segundos =
+                    excluded.duracion_segundos,
+
+                contacto =
+                    excluded.contacto,
+
+                telefono_contacto =
+                    excluded.telefono_contacto,
+
+                agente =
+                    excluded.agente,
+
+                canal_agente =
+                    excluded.canal_agente,
+
+                telefono_agente =
+                    excluded.telefono_agente,
+
+                fecha_ultima_carga =
+                    excluded.fecha_ultima_carga
+            """,
+            registros,
+        )
+
+        conn.commit()
+
+    sincronizadas = (
+        len(registros)
+        - nuevas
+    )
+
+    return (
+        nuevas,
+        sincronizadas,
+    )
+
+

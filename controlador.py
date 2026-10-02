@@ -15,7 +15,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = (
+    PROJECT_ROOT
+    / "data"
+)
 
 ESTADO_PATH = (
     DATA_DIR
@@ -28,8 +31,9 @@ LOCK_PATH = (
 )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # HORARIOS OPERATIVOS
+# ============================================================
 #
 # weekday():
 #   0 = lunes
@@ -39,7 +43,18 @@ LOCK_PATH = (
 #   4 = viernes
 #   5 = sábado
 #   6 = domingo
-# ------------------------------------------------------------
+#
+# Lunes a viernes:
+#   08:00 - 19:00
+#   intensivo desde 17:00
+#
+# Sábado:
+#   08:00 - 13:00
+#   intensivo desde 12:00
+#
+# Domingo:
+#   inactivo
+# ============================================================
 
 HORARIOS = {
     0: {
@@ -72,13 +87,13 @@ HORARIOS = {
         "fin": time(19, 0),
         "inicio_intensivo": time(17, 0),
     },
-    6: {
+    5: {
         "activo": True,
         "inicio": time(8, 0),
-        "fin": time(18, 0),
+        "fin": time(13, 0),
         "inicio_intensivo": time(12, 0),
     },
-    5: {
+    6: {
         "activo": False,
         "inicio": None,
         "fin": None,
@@ -87,21 +102,33 @@ HORARIOS = {
 }
 
 
-# ------------------------------------------------------------
+# ============================================================
 # FUENTES
+# ============================================================
 #
-# Cada fuente puede tener su propia frecuencia.
+# IMPORTANTE:
 #
-# En el futuro podremos agregar aquí:
-#   cloudtalk
-#   whaticket
-#   telefonos
-# ------------------------------------------------------------
+# El orden de este diccionario también define el orden de
+# ejecución.
+#
+# 1. ClearMechanic
+# 2. CloudTalk
+#
+# subprocess.run() es bloqueante, por lo que CloudTalk
+# solamente podrá iniciar cuando ClearMechanic haya terminado.
+# ============================================================
 
 FUENTES = {
     "clearmechanic": {
         "activo": True,
         "script": "actualizador.py",
+        "intervalo_normal": 5,
+        "intervalo_intensivo": 3,
+    },
+
+    "cloudtalk": {
+        "activo": True,
+        "script": "actualizador_cloudtalk.py",
         "intervalo_normal": 5,
         "intervalo_intensivo": 3,
     },
@@ -114,8 +141,8 @@ FUENTES = {
 
 def cargar_estado() -> dict:
     """
-    Recupera la fecha/hora de la última actualización exitosa
-    de cada fuente.
+    Recupera la fecha/hora de la última actualización
+    exitosa de cada fuente.
     """
 
     if not ESTADO_PATH.exists():
@@ -136,7 +163,6 @@ def cargar_estado() -> dict:
         json.JSONDecodeError,
         OSError,
     ):
-
         return {}
 
 
@@ -186,15 +212,21 @@ def obtener_configuracion_horaria(
     if not configuracion:
         return None
 
-    if not configuracion["activo"]:
+    if not configuracion[
+        "activo"
+    ]:
         return None
 
     hora_actual = ahora.time()
 
     if not (
-        configuracion["inicio"]
+        configuracion[
+            "inicio"
+        ]
         <= hora_actual
-        <= configuracion["fin"]
+        <= configuracion[
+            "fin"
+        ]
     ):
         return None
 
@@ -212,7 +244,9 @@ def obtener_intervalo(
 
     if (
         ahora.time()
-        >= horario["inicio_intensivo"]
+        >= horario[
+            "inicio_intensivo"
+        ]
     ):
         return int(
             fuente[
@@ -303,6 +337,7 @@ def liberar_lock() -> None:
     """
 
     if LOCK_PATH.exists():
+
         LOCK_PATH.unlink()
 
 
@@ -315,17 +350,24 @@ def ejecutar_fuente(
     configuracion: dict,
 ) -> bool:
     """
-    Ejecuta el script correspondiente a una fuente.
+    Ejecuta una fuente y espera hasta que termine.
+
+    La ejecución es deliberadamente síncrona:
+    no se inicia ninguna otra fuente mientras este
+    subprocess siga activo.
 
     Devuelve True solamente si terminó correctamente.
     """
 
     script = (
         PROJECT_ROOT
-        / configuracion["script"]
+        / configuracion[
+            "script"
+        ]
     )
 
     if not script.exists():
+
         raise FileNotFoundError(
             f"No existe el script de la fuente "
             f"{nombre}: {script}"
@@ -341,27 +383,63 @@ def ejecutar_fuente(
 
     print("=" * 68)
 
+    inicio = datetime.now()
+
+    print(
+        f"🕐 Inicio: "
+        f"{inicio:%H:%M:%S}"
+    )
+
     resultado = subprocess.run(
         [
             sys.executable,
-            str(script),
+            str(
+                script
+            ),
         ],
         cwd=PROJECT_ROOT,
         check=False,
     )
 
+    fin = datetime.now()
+
+    duracion_segundos = int(
+        (
+            fin
+            -
+            inicio
+        ).total_seconds()
+    )
+
+    minutos, segundos = divmod(
+        duracion_segundos,
+        60,
+    )
+
+    print()
+
     if resultado.returncode != 0:
 
-        print()
         print(
-            f"❌ {nombre}: actualización fallida."
+            f"❌ {nombre}: "
+            f"actualización fallida."
+        )
+
+        print(
+            f"⏱️ Duración: "
+            f"{minutos}m {segundos:02d}s"
         )
 
         return False
 
-    print()
     print(
-        f"✅ {nombre}: actualización completada."
+        f"✅ {nombre}: "
+        f"actualización completada."
+    )
+
+    print(
+        f"⏱️ Duración: "
+        f"{minutos}m {segundos:02d}s"
     )
 
     return True
@@ -373,7 +451,12 @@ def ejecutar_fuente(
 
 def ejecutar_controlador() -> None:
     """
-    Decide qué fuentes deben actualizarse en esta ejecución.
+    Decide qué fuentes deben actualizarse.
+
+    Las fuentes se ejecutan secuencialmente.
+
+    Nunca se ejecutan ClearMechanic y CloudTalk
+    simultáneamente.
     """
 
     ahora = datetime.now()
@@ -388,8 +471,10 @@ def ejecutar_controlador() -> None:
         f"{ahora:%d/%m/%Y %H:%M:%S}"
     )
 
-    horario = obtener_configuracion_horaria(
-        ahora
+    horario = (
+        obtener_configuracion_horaria(
+            ahora
+        )
     )
 
     if horario is None:
@@ -404,20 +489,55 @@ def ejecutar_controlador() -> None:
 
     fuentes_ejecutadas = 0
 
+    # --------------------------------------------------------
+    # IMPORTANTE:
+    #
+    # Este loop es deliberadamente secuencial.
+    #
+    # ejecutar_fuente() usa subprocess.run(), que no retorna
+    # hasta que el script de la fuente haya finalizado.
+    # --------------------------------------------------------
+
     for nombre, configuracion in FUENTES.items():
 
-        if not configuracion["activo"]:
+        if not configuracion[
+            "activo"
+        ]:
+            continue
+
+        # Usamos la hora real antes de evaluar cada fuente.
+        # Esto es importante porque la fuente anterior puede
+        # haber demorado varios minutos.
+        ahora_fuente = datetime.now()
+
+        horario_fuente = (
+            obtener_configuracion_horaria(
+                ahora_fuente
+            )
+        )
+
+        if horario_fuente is None:
+
+            print()
+            print(
+                f"⏸️ {nombre}: "
+                f"ya estamos fuera del horario operativo."
+            )
+
             continue
 
         intervalo = obtener_intervalo(
-            ahora=ahora,
+            ahora=ahora_fuente,
             fuente=configuracion,
-            horario=horario,
+            horario=horario_fuente,
         )
 
         ultima_ejecucion_texto = (
             estado
-            .get(nombre, {})
+            .get(
+                nombre,
+                {},
+            )
             .get(
                 "ultima_ejecucion_exitosa"
             )
@@ -439,7 +559,7 @@ def ejecutar_controlador() -> None:
                 ultima_ejecucion = None
 
         if not corresponde_actualizar(
-            ahora=ahora,
+            ahora=ahora_fuente,
             ultima_ejecucion=ultima_ejecucion,
             intervalo_minutos=intervalo,
         ):
@@ -460,16 +580,25 @@ def ejecutar_controlador() -> None:
         if not exito:
             continue
 
+        # ----------------------------------------------------
+        # La hora guardada es la hora de FINALIZACIÓN.
+        #
+        # Esto evita que una fuente lenta vuelva a considerarse
+        # vencida inmediatamente después de terminar.
+        # ----------------------------------------------------
+
+        fecha_fin = datetime.now()
+
         estado.setdefault(
             nombre,
-            {}
+            {},
         )
 
         estado[
             nombre
         ][
             "ultima_ejecucion_exitosa"
-        ] = datetime.now().isoformat(
+        ] = fecha_fin.isoformat(
             timespec="seconds"
         )
 
