@@ -90,14 +90,14 @@ HORARIOS = {
     5: {
         "activo": True,
         "inicio": time(8, 0),
-        "fin": time(13, 0),
-        "inicio_intensivo": time(12, 0),
+        "fin": time(19, 0),
+        "inicio_intensivo": time(17, 0),
     },
     6: {
-        "activo": False,
-        "inicio": None,
-        "fin": None,
-        "inicio_intensivo": None,
+        "activo": True,
+        "inicio": time(8, 0),
+        "fin": time(19, 0),
+        "inicio_intensivo": time(17, 0),
     },
 }
 

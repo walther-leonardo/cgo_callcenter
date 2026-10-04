@@ -4,3 +4,31 @@ py -m playwright codegen --save-storage=auth/clearmechanic.json https://hondapan
 Scheduler = “despierta y pregunta”.
 Controlador = “decide qué toca hacer”.
 Actualizador = “ejecuta la actualización de ClearMechanic”.
+
+
+comands:
+py .\renovar_sesion.py
+py .\scheduler.py
+streamlit run app.py
+py .\actualizador_cloudtalk.py --periodo ayer
+py .\cloudtalk_dashboard.py --fecha 2026-10-01
+py .\diagnostico_citas_timeline.py
+py .\metricas_cloudtalk.py --fecha 2026-10-01
+py .\renovar_sesion_cloudtalk.py
+streamlit run app.py
+
+
+controlador.py dias de actualizacion sabado - domingo:
+5: {
+        "activo": True,
+        "inicio": time(8, 0),
+        "fin": time(13, 0),
+        "inicio_intensivo": time(12, 0),
+    },
+    6: {
+        "activo": False,
+        "inicio": None,
+        "fin": None,
+        "inicio_intensivo": None,
+    },
+}
