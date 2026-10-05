@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import shutil
+import re
 
-from datetime import date
+from datetime import (
+    date,
+    datetime,
+)
 from pathlib import Path
 
 import requests
@@ -205,6 +209,313 @@ def obtener_boton_visible(
     return None
 
 
+MESES_CALENDARIO = {
+    # Inglés
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+
+    # Español, por seguridad
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+
+
+def obtener_mes_visible_calendario(
+    page: Page,
+) -> date:
+    """
+    Obtiene el mes y año actualmente visibles
+    en el calendario abierto de ClearMechanic.
+
+    Devuelve una fecha usando siempre día 1.
+    """
+
+    etiqueta_mes = page.locator(
+        ".MuiPickersCalendarHeader-label:visible"
+    ).last
+
+    etiqueta_mes.wait_for(
+        state="visible",
+        timeout=10_000,
+    )
+
+    texto = (
+        etiqueta_mes
+        .inner_text()
+        .strip()
+    )
+
+    partes = texto.split()
+
+    if len(partes) != 2:
+
+        raise RuntimeError(
+            "No se pudo interpretar el encabezado "
+            f"del calendario: {texto!r}"
+        )
+
+    mes_texto = (
+        partes[0]
+        .strip()
+        .lower()
+    )
+
+    try:
+        anio = int(
+            partes[1]
+        )
+
+    except ValueError as exc:
+
+        raise RuntimeError(
+            "No se pudo interpretar el año "
+            f"del calendario: {texto!r}"
+        ) from exc
+
+    mes = MESES_CALENDARIO.get(
+        mes_texto
+    )
+
+    if mes is None:
+
+        raise RuntimeError(
+            "Mes no reconocido en calendario: "
+            f"{texto!r}"
+        )
+
+    return date(
+        anio,
+        mes,
+        1,
+    )
+
+
+def navegar_calendario_a_fecha(
+    page: Page,
+    fecha_destino: date,
+) -> None:
+    """
+    Navega desde el mes actualmente visible en el calendario
+    hasta el mes de fecha_destino.
+    """
+
+    mes_actual = (
+        obtener_mes_visible_calendario(
+            page
+        )
+    )
+
+    mes_destino = date(
+        fecha_destino.year,
+        fecha_destino.month,
+        1,
+    )
+
+    meses = diferencia_meses(
+        fecha_origen=mes_actual,
+        fecha_destino=mes_destino,
+    )
+
+    print(
+        f"   Mes visible: "
+        f"{mes_actual:%m/%Y}"
+    )
+
+    print(
+        f"   Mes objetivo: "
+        f"{mes_destino:%m/%Y}"
+    )
+
+    if meses > 0:
+
+        for _ in range(
+            meses
+        ):
+
+            botones_siguiente = (
+                page.get_by_role(
+                    "button",
+                    name="Next month",
+                )
+            )
+
+            boton_siguiente = (
+                obtener_boton_visible(
+                    botones_siguiente
+                )
+            )
+
+            if boton_siguiente is None:
+
+                raise RuntimeError(
+                    "No se encontró el botón visible "
+                    "'Next month'."
+                )
+
+            boton_siguiente.click()
+
+            page.wait_for_timeout(
+                300
+            )
+
+    elif meses < 0:
+
+        for _ in range(
+            abs(
+                meses
+            )
+        ):
+
+            botones_anterior = (
+                page.get_by_role(
+                    "button",
+                    name="Previous month",
+                )
+            )
+
+            boton_anterior = (
+                obtener_boton_visible(
+                    botones_anterior
+                )
+            )
+
+            if boton_anterior is None:
+
+                raise RuntimeError(
+                    "No se encontró el botón visible "
+                    "'Previous month'."
+                )
+
+            boton_anterior.click()
+
+            page.wait_for_timeout(
+                300
+            )
+
+    # Verificación final
+    mes_final = (
+        obtener_mes_visible_calendario(
+            page
+        )
+    )
+
+    if (
+        mes_final.year
+        != fecha_destino.year
+        or mes_final.month
+        != fecha_destino.month
+    ):
+
+        raise RuntimeError(
+            "El calendario no llegó al mes esperado. "
+            f"Visible: {mes_final:%m/%Y} | "
+            f"Esperado: {fecha_destino:%m/%Y}"
+        )
+
+
+def navegar_calendario(
+    page: Page,
+    fecha_origen: date,
+    fecha_destino: date,
+) -> None:
+    """
+    Navega el calendario visible desde el mes de fecha_origen
+    hasta el mes de fecha_destino.
+    """
+
+    meses = diferencia_meses(
+        fecha_origen=fecha_origen,
+        fecha_destino=fecha_destino,
+    )
+
+    if meses > 0:
+
+        for _ in range(
+            meses
+        ):
+
+            botones_siguiente = (
+                page.get_by_role(
+                    "button",
+                    name="Next month",
+                )
+            )
+
+            boton_siguiente = (
+                obtener_boton_visible(
+                    botones_siguiente
+                )
+            )
+
+            if boton_siguiente is None:
+
+                raise RuntimeError(
+                    "No se encontró el botón visible "
+                    "'Next month'."
+                )
+
+            boton_siguiente.click()
+
+            page.wait_for_timeout(
+                250
+            )
+
+    elif meses < 0:
+
+        for _ in range(
+            abs(
+                meses
+            )
+        ):
+
+            botones_anterior = (
+                page.get_by_role(
+                    "button",
+                    name="Previous month",
+                )
+            )
+
+            boton_anterior = (
+                obtener_boton_visible(
+                    botones_anterior
+                )
+            )
+
+            if boton_anterior is None:
+
+                raise RuntimeError(
+                    "No se encontró el botón visible "
+                    "'Previous month'."
+                )
+
+            boton_anterior.click()
+
+            page.wait_for_timeout(
+                250
+            )
+
+
 def seleccionar_dia_calendario(
     page: Page,
     fecha: date,
@@ -266,7 +577,8 @@ def seleccionar_fecha_inicio(
     fecha_inicio: date,
 ) -> None:
     """
-    Selecciona la fecha inicial.
+    Selecciona la fecha inicial asegurando primero
+    que el calendario esté situado en el mes correcto.
     """
 
     boton_inicio = (
@@ -283,6 +595,11 @@ def seleccionar_fecha_inicio(
         300
     )
 
+    navegar_calendario_a_fecha(
+        page=page,
+        fecha_destino=fecha_inicio,
+    )
+
     seleccionar_dia_calendario(
         page=page,
         fecha=fecha_inicio,
@@ -291,13 +608,11 @@ def seleccionar_fecha_inicio(
 
 def seleccionar_fecha_fin(
     page: Page,
-    fecha_inicio: date,
     fecha_fin: date,
 ) -> None:
     """
-    Selecciona la fecha final.
-
-    Navega por meses usando únicamente el calendario visible.
+    Selecciona la fecha final asegurando primero
+    que el calendario esté situado en el mes correcto.
     """
 
     boton_fin = (
@@ -314,66 +629,10 @@ def seleccionar_fecha_fin(
         300
     )
 
-    meses = diferencia_meses(
-        fecha_origen=fecha_inicio,
+    navegar_calendario_a_fecha(
+        page=page,
         fecha_destino=fecha_fin,
     )
-
-    if meses > 0:
-
-        for _ in range(meses):
-
-            botones_siguiente = (
-                page.get_by_role(
-                    "button",
-                    name="Next month",
-                )
-            )
-
-            boton_siguiente = obtener_boton_visible(
-                botones_siguiente
-            )
-
-            if boton_siguiente is None:
-                raise RuntimeError(
-                    "No se encontró el botón visible "
-                    "'Next month'."
-                )
-
-            boton_siguiente.click()
-
-            page.wait_for_timeout(
-                250
-            )
-
-    elif meses < 0:
-
-        for _ in range(
-            abs(meses)
-        ):
-
-            botones_anterior = (
-                page.get_by_role(
-                    "button",
-                    name="Previous month",
-                )
-            )
-
-            boton_anterior = obtener_boton_visible(
-                botones_anterior
-            )
-
-            if boton_anterior is None:
-                raise RuntimeError(
-                    "No se encontró el botón visible "
-                    "'Previous month'."
-                )
-
-            boton_anterior.click()
-
-            page.wait_for_timeout(
-                250
-            )
 
     seleccionar_dia_calendario(
         page=page,
@@ -720,7 +979,6 @@ def descargar_clearmechanic(
 
             seleccionar_fecha_fin(
                 page=page,
-                fecha_inicio=fecha_inicio,
                 fecha_fin=fecha_fin,
             )
 

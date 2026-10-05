@@ -9,12 +9,12 @@ Actualizador = “ejecuta la actualización de ClearMechanic”.
 comands:
 py .\renovar_sesion.py
 py .\scheduler.py
-streamlit run app.py
 py .\actualizador_cloudtalk.py --periodo ayer
 py .\cloudtalk_dashboard.py --fecha 2026-10-01
 py .\diagnostico_citas_timeline.py
 py .\metricas_cloudtalk.py --fecha 2026-10-01
 py .\renovar_sesion_cloudtalk.py
+py .\downloader.py                                  | ejecuta la descarga de reporte de clearmechanic
 streamlit run app.py
 
 
