@@ -18,6 +18,10 @@ py .\renovar_sesion_cloudtalk.py
 streamlit run app.py
 
 
+pip freeze > requirements.txt
+pip install -r requirements.txt
+
+
 controlador.py dias de actualizacion sabado - domingo:
 5: {
         "activo": True,
