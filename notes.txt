@@ -1,3 +1,4 @@
+🔹
 py -m playwright codegen https://hondapanasanisidro.clearmechanic.com
 py -m playwright codegen --save-storage=auth/clearmechanic.json https://hondapanasanisidro.clearmechanic.com/dashboard/login
 
@@ -5,7 +6,7 @@ Scheduler = “despierta y pregunta”.
 Controlador = “decide qué toca hacer”.
 Actualizador = “ejecuta la actualización de ClearMechanic”.
 
-
+🔹
 comands:
 py .\renovar_sesion.py
 py .\scheduler.py
@@ -17,11 +18,11 @@ py .\renovar_sesion_cloudtalk.py
 py .\downloader.py                                  | ejecuta la descarga de reporte de clearmechanic
 streamlit run app.py
 
-
+🔹
 pip freeze > requirements.txt
 pip install -r requirements.txt
 
-
+🔹
 controlador.py dias de actualizacion sabado - domingo:
 5: {
         "activo": True,
@@ -36,3 +37,14 @@ controlador.py dias de actualizacion sabado - domingo:
         "inicio_intensivo": None,
     },
 }
+
+🔹
+streamlit:
+Desarrollo → 8502       streamlit run app.py --server.port 8502
+Beta       → 8503       streamlit run app.py --server.port 8503
+Producción → 8501       streamlit run app.py
+
+
+🔹
+utilitarios:
+py -m scripts.nombre_del_script

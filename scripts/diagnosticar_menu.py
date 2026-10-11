@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 # CONFIGURACIÓN
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 BROWSER_PROFILE = (
     PROJECT_ROOT
