@@ -66,7 +66,8 @@ def main() -> None:
     )
 
     print(
-        "Ahora ejecuta recalcular_historico.py."
+        "Ahora ejecuta: "
+        "py -m scripts.recalcular_historico"
     )
 
 

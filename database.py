@@ -72,6 +72,53 @@ def inicializar_base() -> None:
             """
         )
 
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS citas_maestro (
+                id_cita INTEGER PRIMARY KEY,
+
+                primer_snapshot_id INTEGER NOT NULL,
+                primera_deteccion TEXT NOT NULL,
+
+                ultimo_snapshot_id INTEGER NOT NULL,
+                ultima_deteccion TEXT NOT NULL,
+
+                presente_en_ultimo_snapshot INTEGER NOT NULL,
+
+                estatus_cita TEXT,
+                motivo_visita TEXT,
+                fecha_programada TEXT,
+                hora_programada TEXT,
+                origen_cita TEXT,
+                persona_agenda TEXT,
+                fecha_creacion TEXT,
+
+                nombre TEXT,
+                celular TEXT,
+                asesor_servicio TEXT,
+                modelo TEXT,
+                placa TEXT,
+                kilometraje REAL,
+
+                FOREIGN KEY (
+                    primer_snapshot_id
+                )
+                REFERENCES snapshots (
+                    snapshot_id
+                ),
+
+                FOREIGN KEY (
+                    ultimo_snapshot_id
+                )
+                REFERENCES snapshots (
+                    snapshot_id
+                )
+            )
+            """
+        )
+
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS cambios_snapshot (
@@ -163,7 +210,40 @@ def inicializar_base() -> None:
             )
             """
         )
-        
+
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_citas_maestro_primera_deteccion
+            ON citas_maestro (
+                primera_deteccion
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_citas_maestro_agente_deteccion
+            ON citas_maestro (
+                persona_agenda,
+                primera_deteccion
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_citas_maestro_presente
+            ON citas_maestro (
+                presente_en_ultimo_snapshot
+            )
+            """
+        )
+
+
         conn.commit()
 
 

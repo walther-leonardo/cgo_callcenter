@@ -47,4 +47,12 @@ Producción → 8501       streamlit run app.py
 
 🔹
 utilitarios:
-py -m scripts.nombre_del_script
+py -m scripts.[nombre_del_script]
+
+
+🔹
+procedimiento cambios database 11/10 (ejecutar los 3 pasos uno por uno, una solo 1 vez):
+
+py -c "from database import inicializar_base; inicializar_base(); print('✅ Schema actualizado')"
+py -m scripts.diagnostico_schema
+py -m scripts.backfill_citas_maestro
