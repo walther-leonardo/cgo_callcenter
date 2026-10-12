@@ -308,31 +308,6 @@ def cargar_citas_agendadas_timeline(
     with get_connection() as conn:
 
         query = """
-        WITH primeras_apariciones AS (
-            SELECT
-                cs.id_cita,
-                cs.persona_agenda,
-                cs.origen_cita,
-                cs.nombre,
-                cs.celular,
-                cs.placa,
-                cs.modelo,
-
-                s.fecha_hora_corte AS fecha_detectada,
-
-                ROW_NUMBER() OVER (
-                    PARTITION BY cs.id_cita
-                    ORDER BY
-                        s.fecha_hora_corte,
-                        s.snapshot_id
-                ) AS orden_aparicion
-
-            FROM citas_snapshot cs
-
-            INNER JOIN snapshots s
-                ON s.snapshot_id = cs.snapshot_id
-        )
-
         SELECT
             id_cita,
             persona_agenda,
@@ -343,10 +318,9 @@ def cargar_citas_agendadas_timeline(
             modelo,
             fecha_detectada
 
-        FROM primeras_apariciones
+        FROM citas_primera_deteccion
 
-        WHERE orden_aparicion = 1
-          AND date(fecha_detectada) = ?
+        WHERE date(fecha_detectada) = ?
 
         ORDER BY fecha_detectada
         """

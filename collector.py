@@ -422,6 +422,71 @@ def registrar_snapshot(
             registros_maestro,
         )
 
+
+
+
+
+        # ====================================================
+        # REGISTRAR PRIMERA DETECCIÓN
+        # ====================================================
+
+        conn.executemany(
+            """
+            INSERT INTO citas_primera_deteccion (
+                id_cita,
+                snapshot_id,
+                fecha_detectada,
+
+                estatus_cita,
+                motivo_visita,
+                fecha_programada,
+                hora_programada,
+                origen_cita,
+                persona_agenda,
+                fecha_creacion,
+
+                nombre,
+                celular,
+                asesor_servicio,
+                modelo,
+                placa,
+                kilometraje
+            )
+
+            VALUES (
+                :id_cita,
+                :snapshot_id,
+                :fecha_deteccion,
+
+                :estatus_cita,
+                :motivo_visita,
+                :fecha_programada,
+                :hora_programada,
+                :origen_cita,
+                :persona_agenda,
+                :fecha_creacion,
+
+                :nombre,
+                :celular,
+                :asesor_servicio,
+                :modelo,
+                :placa,
+                :kilometraje
+            )
+
+            ON CONFLICT (
+                id_cita
+            )
+
+            DO NOTHING
+            """,
+            registros_maestro,
+        )
+
+
+
+
+
         conn.commit()
 
     return snapshot_id

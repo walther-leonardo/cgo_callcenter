@@ -118,6 +118,60 @@ def inicializar_base() -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS citas_primera_deteccion (
+                id_cita INTEGER PRIMARY KEY,
+
+                snapshot_id INTEGER NOT NULL,
+                fecha_detectada TEXT NOT NULL,
+
+                estatus_cita TEXT,
+                motivo_visita TEXT,
+                fecha_programada TEXT,
+                hora_programada TEXT,
+                origen_cita TEXT,
+                persona_agenda TEXT,
+                fecha_creacion TEXT,
+
+                nombre TEXT,
+                celular TEXT,
+                asesor_servicio TEXT,
+                modelo TEXT,
+                placa TEXT,
+                kilometraje REAL,
+
+                FOREIGN KEY (
+                    snapshot_id
+                )
+                REFERENCES snapshots (
+                    snapshot_id
+                )
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_citas_primera_deteccion_fecha
+            ON citas_primera_deteccion (
+                fecha_detectada
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_citas_primera_deteccion_agente_fecha
+            ON citas_primera_deteccion (
+                persona_agenda,
+                fecha_detectada
+            )
+            """
+        )
+
 
         conn.execute(
             """

@@ -51,8 +51,30 @@ py -m scripts.[nombre_del_script]
 
 
 🔹
-procedimiento cambios database 11/10 (ejecutar los 3 pasos uno por uno, una solo 1 vez):
+procedimiento cambios database 11/10 (ejecutar los 4 pasos uno por uno, una solo 1 vez):
 
 py -c "from database import inicializar_base; inicializar_base(); print('✅ Schema actualizado')"
 py -m scripts.diagnostico_schema
 py -m scripts.backfill_citas_maestro
+py -m py_compile collector.py
+
+luego de ejecutar los 4 anteriores esto:
+py -c "from database import get_connection; c=get_connection(); print('maestro:', c.execute('SELECT COUNT(*) FROM citas_maestro').fetchone()[0]); print('presentes:', c.execute('SELECT COUNT(*) FROM citas_maestro WHERE presente_en_ultimo_snapshot=1').fetchone()[0]); print('snapshots:', c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0]); print('ultimo:', c.execute('SELECT snapshot_id,cantidad_citas FROM snapshots ORDER BY snapshot_id DESC LIMIT 1').fetchone()); c.close()"
+py -c "from database import get_connection; c=get_connection(); print(c.execute('SELECT id_cita,primer_snapshot_id,primera_deteccion,ultimo_snapshot_id,ultima_deteccion FROM citas_maestro ORDER BY primera_deteccion LIMIT 5').fetchall()); c.close()"
+
+luego de ejecutar los 4 siguientes:
+py -c "from database import inicializar_base; inicializar_base(); print('✅ Schema actualizado')"
+py -m scripts.diagnostico_schema
+py -m py_compile scripts/backfill_citas_primera_deteccion.py
+py -m scripts.backfill_citas_primera_deteccion
+
+luego de ejecutar los 3 siguientes:
+py -m py_compile collector.py
+py -m py_compile cloudtalk_dashboard.py
+py -m scripts.auditar_timeline_maestro
+
+
+(dejar actualizar algunos cortes)
+py -c "from database import get_connection; c=get_connection(); print('maestro:', c.execute('SELECT COUNT(*) FROM citas_maestro').fetchone()[0]); print('primera_deteccion:', c.execute('SELECT COUNT(*) FROM citas_primera_deteccion').fetchone()[0]); print('faltan_primera:', c.execute('SELECT COUNT(*) FROM citas_maestro m LEFT JOIN citas_primera_deteccion p ON p.id_cita=m.id_cita WHERE p.id_cita IS NULL').fetchone()[0]); print('sobran_primera:', c.execute('SELECT COUNT(*) FROM citas_primera_deteccion p LEFT JOIN citas_maestro m ON m.id_cita=p.id_cita WHERE m.id_cita IS NULL').fetchone()[0]); c.close()"
+py -c "from database import get_connection; c=get_connection(); print(c.execute('SELECT id_cita,snapshot_id,fecha_detectada,persona_agenda FROM citas_primera_deteccion ORDER BY fecha_detectada DESC LIMIT 10').fetchall()); c.close()"
+
