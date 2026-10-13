@@ -51,7 +51,7 @@ py -m scripts.[nombre_del_script]
 
 
 🔹
-procedimiento cambios database 11/10 (ejecutar los 4 pasos uno por uno, una solo 1 vez):
+procedimiento cambios database 11/10 (ejecutar los siguientes pasos uno por uno, una solo 1 vez):
 
 py -c "from database import inicializar_base; inicializar_base(); print('✅ Schema actualizado')"
 py -m scripts.diagnostico_schema
@@ -75,6 +75,28 @@ py -m scripts.auditar_timeline_maestro
 
 
 (dejar actualizar algunos cortes)
+
 py -c "from database import get_connection; c=get_connection(); print('maestro:', c.execute('SELECT COUNT(*) FROM citas_maestro').fetchone()[0]); print('primera_deteccion:', c.execute('SELECT COUNT(*) FROM citas_primera_deteccion').fetchone()[0]); print('faltan_primera:', c.execute('SELECT COUNT(*) FROM citas_maestro m LEFT JOIN citas_primera_deteccion p ON p.id_cita=m.id_cita WHERE p.id_cita IS NULL').fetchone()[0]); print('sobran_primera:', c.execute('SELECT COUNT(*) FROM citas_primera_deteccion p LEFT JOIN citas_maestro m ON m.id_cita=p.id_cita WHERE m.id_cita IS NULL').fetchone()[0]); c.close()"
 py -c "from database import get_connection; c=get_connection(); print(c.execute('SELECT id_cita,snapshot_id,fecha_detectada,persona_agenda FROM citas_primera_deteccion ORDER BY fecha_detectada DESC LIMIT 10').fetchall()); c.close()"
 
+
+py -c "from scripts.recalcular_historico import cargar_snapshots_recalculables; d=cargar_snapshots_recalculables(); print('cantidad:', len(d)); print('primero:', d.head(3).to_dict('records')); print('ultimos:', d.tail(8).to_dict('records'))"
+py -m py_compile scripts/recalcular_historico.py
+
+
+Danger zone🔥
+py -m py_compile scripts/aplicar_retencion_citas_snapshot.py
+py -m scripts.aplicar_retencion_citas_snapshot
+
+
+
+py -c "from database import get_connection; c=get_connection(); print('integrity_check:', c.execute('PRAGMA integrity_check').fetchone()[0]); print('foreign_key_check:', c.execute('PRAGMA foreign_key_check').fetchall()); c.close()"
+py -m scripts.diagnostico_schema
+py -m scripts.auditar_paridad_maestro
+py -c "from scripts.recalcular_historico import cargar_snapshots_recalculables; d=cargar_snapshots_recalculables(); print('cantidad:', len(d)); print(d.to_dict('records'))"
+
+
+py -c "from database import get_connection; c=get_connection(); print('page_count:', c.execute('PRAGMA page_count').fetchone()[0]); print('freelist_count:', c.execute('PRAGMA freelist_count').fetchone()[0]); print('page_size:', c.execute('PRAGMA page_size').fetchone()[0]); c.close()"
+py -c "from database import get_connection; c=get_connection(); c.execute('VACUUM'); c.close(); print('✅ VACUUM completado')"
+py -m scripts.diagnostico_schema
+py -c "from database import get_connection; c=get_connection(); print('integrity_check:', c.execute('PRAGMA integrity_check').fetchone()[0]); print('foreign_key_check:', c.execute('PRAGMA foreign_key_check').fetchall()); c.close()"
