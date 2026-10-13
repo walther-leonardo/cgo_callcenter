@@ -50,6 +50,7 @@ utilitarios:
 py -m scripts.[nombre_del_script]
 
 
+--------------------------------------------------------------------
 🔹
 procedimiento cambios database 11/10 (ejecutar los siguientes pasos uno por uno, una solo 1 vez):
 
@@ -100,3 +101,10 @@ py -c "from database import get_connection; c=get_connection(); print('page_coun
 py -c "from database import get_connection; c=get_connection(); c.execute('VACUUM'); c.close(); print('✅ VACUUM completado')"
 py -m scripts.diagnostico_schema
 py -c "from database import get_connection; c=get_connection(); print('integrity_check:', c.execute('PRAGMA integrity_check').fetchone()[0]); print('foreign_key_check:', c.execute('PRAGMA foreign_key_check').fetchall()); c.close()"
+
+
+py -m py_compile retencion.py
+py -m py_compile actualizador.py
+py -m py_compile collector.py
+py -c "from retencion import aplicar_retencion_citas_snapshot; print(aplicar_retencion_citas_snapshot())"
+--------------------------------------------------------------------
