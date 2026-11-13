@@ -4,6 +4,7 @@ import pandas as pd
 
 from clasificaciones import clasificar_sentido_origen
 from database import get_connection
+from procesamiento import construir_vista_operativa_citas
 
 
 # ============================================================
@@ -680,14 +681,25 @@ def guardar_analitica_snapshot(
     """
     Calcula y persiste deltas/KPI asociados a un snapshot.
 
+    Los snapshots almacenan la fotografía completa de
+    ClearMechanic, incluidas citas Canceladas y duplicados.
+
+    Los KPI operativos utilizan una vista depurada:
+    - excluye Canceladas;
+    - deduplica según las reglas de negocio.
+
     Es idempotente:
     si se ejecuta nuevamente para el mismo snapshot,
     reemplaza sus métricas y cambios anteriores.
     """
 
+    # ========================================================
+    # SNAPSHOT ACTUAL — RAW
+    # ========================================================
+
     (
         actual_info,
-        actual,
+        actual_raw,
     ) = cargar_info_snapshot(
         snapshot_id
     )
@@ -703,10 +715,24 @@ def guardar_analitica_snapshot(
         .normalize()
     )
 
+    # ========================================================
+    # SNAPSHOT ACTUAL — VISTA OPERATIVA
+    # ========================================================
+
+    actual = (
+        construir_vista_operativa_citas(
+            actual_raw
+        )
+    )
+
     actual = agregar_bucket(
         df=actual,
         fecha_base=fecha_base,
     )
+
+    # ========================================================
+    # REFERENCIAS
+    # ========================================================
 
     snapshot_anterior_id = (
         obtener_snapshot_anterior(
@@ -723,13 +749,16 @@ def guardar_analitica_snapshot(
         )
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # MÉTRICAS
-    # --------------------------------------------------------
+    # ========================================================
 
     metricas: list[dict] = []
 
-    # Estado actual
+    # --------------------------------------------------------
+    # AGENDA ACTUAL
+    # --------------------------------------------------------
+
     agregar_metrica(
         metricas=metricas,
         metrica="AGENDA_ACTUAL",
@@ -748,17 +777,27 @@ def guardar_analitica_snapshot(
 
     cambios_db = []
 
-    # --------------------------------------------------------
+    # ========================================================
     # DELTA CONTRA CORTE ANTERIOR
-    # --------------------------------------------------------
+    # ========================================================
 
     if snapshot_anterior_id is not None:
 
         (
             _,
-            anterior,
+            anterior_raw,
         ) = cargar_info_snapshot(
             snapshot_anterior_id
+        )
+
+        # ----------------------------------------------------
+        # VISTA OPERATIVA ANTERIOR
+        # ----------------------------------------------------
+
+        anterior = (
+            construir_vista_operativa_citas(
+                anterior_raw
+            )
         )
 
         anterior = agregar_bucket(
@@ -766,16 +805,24 @@ def guardar_analitica_snapshot(
             fecha_base=fecha_base,
         )
 
-        delta = comparar_snapshots(
+        # ----------------------------------------------------
+        # DELTA OPERATIVO
+        #
+        # Sirve para:
+        # - nuevas
+        # - desaparecidas de agenda activa
+        # ----------------------------------------------------
+
+        delta_operativo = comparar_snapshots(
             anterior=anterior,
             actual=actual,
         )
 
-        nuevas = delta[
+        nuevas = delta_operativo[
             "nuevas"
         ]
 
-        desaparecidas = delta[
+        desaparecidas = delta_operativo[
             "desaparecidas"
         ]
 
@@ -817,7 +864,10 @@ def guardar_analitica_snapshot(
             ),
         )
 
-        # Citas nuevas
+        # ----------------------------------------------------
+        # REGISTRAR CAMBIOS OPERATIVOS
+        # ----------------------------------------------------
+
         for fila in nuevas.itertuples(
             index=False
         ):
@@ -843,7 +893,6 @@ def guardar_analitica_snapshot(
                 }
             )
 
-        # Desaparecidas
         for fila in desaparecidas.itertuples(
             index=False
         ):
@@ -856,7 +905,7 @@ def guardar_analitica_snapshot(
                         ),
 
                     "tipo_cambio":
-                        "DESAPARECE_DEL_SNAPSHOT",
+                        "DESAPARECE_DE_AGENDA_ACTIVA",
 
                     "campo":
                         None,
@@ -869,12 +918,31 @@ def guardar_analitica_snapshot(
                 }
             )
 
-        # Cambios internos
-        cambios_db.extend(
-            delta[
-                "cambios"
-            ]
+        # ----------------------------------------------------
+        # DELTA RAW
+        #
+        # Permite conservar cambios reales de ClearMechanic,
+        # especialmente:
+        #
+        # Orden creada → Cancelada
+        # ----------------------------------------------------
+
+        delta_raw = comparar_snapshots(
+            anterior=anterior_raw,
+            actual=actual_raw,
         )
+
+        cambios_raw = delta_raw[
+            "cambios"
+        ]
+
+        cambios_db.extend(
+            cambios_raw
+        )
+
+        # ----------------------------------------------------
+        # CAMBIOS DE ESTADO
+        # ----------------------------------------------------
 
         agregar_metrica(
             metricas=metricas,
@@ -889,11 +957,13 @@ def guardar_analitica_snapshot(
                 "CAMBIO_ESTADO"
 
                 for cambio
-                in delta[
-                    "cambios"
-                ]
+                in cambios_raw
             ),
         )
+
+        # ----------------------------------------------------
+        # REPROGRAMACIONES
+        # ----------------------------------------------------
 
         agregar_metrica(
             metricas=metricas,
@@ -906,9 +976,7 @@ def guardar_analitica_snapshot(
                         "id_cita"
                     ]
                     for cambio
-                    in delta[
-                        "cambios"
-                    ]
+                    in cambios_raw
                     if cambio[
                         "tipo_cambio"
                     ]
@@ -918,15 +986,21 @@ def guardar_analitica_snapshot(
             ),
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # DELTA DESDE PRIMER CORTE DEL DÍA
-    # --------------------------------------------------------
+    # ========================================================
 
     (
         _,
-        inicio_dia,
+        inicio_dia_raw,
     ) = cargar_info_snapshot(
         primer_snapshot_id
+    )
+
+    inicio_dia = (
+        construir_vista_operativa_citas(
+            inicio_dia_raw
+        )
     )
 
     inicio_dia = agregar_bucket(
@@ -985,13 +1059,12 @@ def guardar_analitica_snapshot(
         nombre_metrica="NUEVAS_DESDE_INICIO_DIA",
     )
 
-    # --------------------------------------------------------
-    # GUARDAR
-    # --------------------------------------------------------
+    # ========================================================
+    # PERSISTENCIA
+    # ========================================================
 
     with get_connection() as conn:
 
-        # Permite recalcular un snapshot sin duplicar resultados.
         conn.execute(
             """
             DELETE FROM metricas_snapshot

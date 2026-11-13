@@ -9,6 +9,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from database import get_connection
 
+from procesamiento import construir_vista_operativa_citas
 from reportes import (
     construir_control_indeterminados,
     construir_reporte_canal_agenda,
@@ -164,6 +165,16 @@ def cargar_metricas() -> pd.DataFrame:
 def cargar_citas_snapshot(
     snapshot_id: int,
 ) -> pd.DataFrame:
+    """
+    Carga un snapshot y devuelve su vista operativa.
+
+    El SQLite conserva el snapshot completo, incluyendo
+    Canceladas y duplicados físicos.
+
+    Streamlit trabaja únicamente con:
+    - citas activas;
+    - citas deduplicadas según reglas de negocio.
+    """
 
     with get_connection() as conn:
 
@@ -174,16 +185,25 @@ def cargar_citas_snapshot(
             WHERE snapshot_id = ?
             """,
             conn,
-            params=[snapshot_id],
+            params=[
+                snapshot_id
+            ],
         )
 
-    df["fecha_programada"] = pd.to_datetime(
-        df["fecha_programada"],
+    df[
+        "fecha_programada"
+    ] = pd.to_datetime(
+        df[
+            "fecha_programada"
+        ],
         errors="coerce",
     ).dt.normalize()
 
-    return df
+    df = construir_vista_operativa_citas(
+        df
+    )
 
+    return df
 
 # ============================================================
 # HELPERS — MÉTRICAS
