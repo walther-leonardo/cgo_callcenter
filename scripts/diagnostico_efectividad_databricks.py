@@ -11,7 +11,13 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from databricks import sql
 from dotenv import load_dotenv
-
+from clasificaciones import (
+    clasificar_canal_agenda,
+    normalizar_persona_agenda,
+)
+from matching_efectividad import (
+    calcular_matching_efectividad,
+)
 
 # ============================================================
 # CONFIGURACIÓN
@@ -22,10 +28,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ZONA_LIMA = ZoneInfo("America/Lima")
 ZONA_UTC = ZoneInfo("UTC")
 
-AGENTES_CALLCENTER = {
-    "Rocio Miranda Ausejo",
-    "Brenda Montalvan Cornejo",
-}
 
 TABLA_CITAS = (
     "db_silver.ro_pa_cmos_citas"
@@ -268,6 +270,68 @@ def normalizar_placa(
     )
 
 
+def normalizar_texto_clave(
+    valor,
+) -> str:
+    """
+    Normaliza texto exclusivamente para comparar citas.
+    """
+
+    if pd.isna(valor):
+        return ""
+
+    return " ".join(
+        str(valor)
+        .strip()
+        .upper()
+        .split()
+    )
+
+
+def normalizar_celular(
+    valor,
+) -> str:
+    """
+    Conserva únicamente los dígitos del celular.
+    """
+
+    if pd.isna(valor):
+        return ""
+
+    texto = str(
+        valor
+    ).strip()
+
+    if texto.endswith(".0"):
+        texto = texto[:-2]
+
+    return re.sub(
+        r"\D",
+        "",
+        texto,
+    )
+
+
+def es_status_cancelado(
+    valor,
+) -> bool:
+    """
+    Detecta estados de cancelación.
+
+    Se utiliza 'CANCEL' como raíz para soportar valores como:
+    CANCELADA / CANCELED / CANCELLED.
+
+    La distribución real de status también se imprimirá
+    para auditoría.
+    """
+
+    texto = normalizar_texto_clave(
+        valor
+    )
+
+    return "CANCEL" in texto
+
+
 def convertir_booleano(
     valor,
 ) -> bool:
@@ -337,6 +401,7 @@ def obtener_citas(
             appointmentOrigin,
             creationDate,
             startDate,
+            status,
             isDeleted,
             description,
             detalle_description
@@ -367,18 +432,20 @@ def consolidar_citas(
 ) -> tuple[pd.DataFrame, dict]:
 
     if citas_raw.empty:
+
         return (
             pd.DataFrame(),
             {
                 "filas_raw": 0,
                 "citas_unicas": 0,
-                "eliminadas": 0,
-                "elegibles": 0,
-                "sin_placa": 0,
             },
         )
 
     citas = citas_raw.copy()
+
+    # ========================================================
+    # VALIDAR KEY_MERGE
+    # ========================================================
 
     if citas[
         "Key_merge"
@@ -395,16 +462,18 @@ def consolidar_citas(
             "filas sin Key_merge."
         )
 
-    # --------------------------------------------------------
-    # VALIDAR CONSISTENCIA DENTRO DE Key_merge
-    # --------------------------------------------------------
+    # ========================================================
+    # VALIDAR CONSISTENCIA INTERNA
+    # ========================================================
 
     campos_criticos = [
         "appointmentNumber",
         "workshop_id",
         "licensePlate",
+        "mobile",
         "startDate",
         "userWhoSchedule",
+        "status",
         "isDeleted",
     ]
 
@@ -423,11 +492,12 @@ def consolidar_citas(
             dropna=False
         )
 
-        ids = cantidades[
+        ids = cantidades.loc[
             cantidades > 1
         ].index.tolist()
 
         for id_cita in ids:
+
             inconsistentes.append(
                 (
                     id_cita,
@@ -437,19 +507,15 @@ def consolidar_citas(
 
     if inconsistentes:
 
-        muestra = inconsistentes[
-            :10
-        ]
-
         raise ValueError(
             "Se encontraron Key_merge con "
             "campos críticos inconsistentes. "
-            f"Muestra: {muestra}"
+            f"Muestra: {inconsistentes[:10]}"
         )
 
-    # --------------------------------------------------------
-    # CONSOLIDAR UNA FILA POR CITA
-    # --------------------------------------------------------
+    # ========================================================
+    # UNA FILA POR CITA LÓGICA
+    # ========================================================
 
     citas = (
         citas
@@ -491,6 +557,10 @@ def consolidar_citas(
                 "startDate",
                 "first",
             ),
+            status=(
+                "status",
+                "first",
+            ),
             isDeleted=(
                 "isDeleted",
                 "first",
@@ -525,9 +595,9 @@ def consolidar_citas(
         }
     )
 
-    # --------------------------------------------------------
-    # ELIMINADAS
-    # --------------------------------------------------------
+    # ========================================================
+    # NORMALIZACIONES
+    # ========================================================
 
     citas[
         "is_deleted"
@@ -537,10 +607,6 @@ def consolidar_citas(
         convertir_booleano
     )
 
-    # --------------------------------------------------------
-    # NORMALIZAR PLACA
-    # --------------------------------------------------------
-
     citas[
         "placa_normalizada"
     ] = citas[
@@ -549,10 +615,41 @@ def consolidar_citas(
         normalizar_placa
     )
 
-    # --------------------------------------------------------
-    # FECHA/HORA DE CITA
-    # startDate viene en UTC.
-    # --------------------------------------------------------
+    citas[
+        "telefono_normalizado"
+    ] = citas[
+        "telefono"
+    ].apply(
+        normalizar_celular
+    )
+
+    citas[
+        "motivo_normalizado"
+    ] = citas[
+        "motivos"
+    ].apply(
+        normalizar_texto_clave
+    )
+
+    citas[
+        "status_normalizado"
+    ] = citas[
+        "status"
+    ].apply(
+        normalizar_texto_clave
+    )
+
+    citas[
+        "es_cancelada_status"
+    ] = citas[
+        "status"
+    ].apply(
+        es_status_cancelado
+    )
+
+    # ========================================================
+    # FECHA/HORA CITA — UTC → LIMA
+    # ========================================================
 
     fecha_hora_utc = pd.to_datetime(
         citas[
@@ -580,13 +677,9 @@ def consolidar_citas(
         .dt.date
     )
 
-    # --------------------------------------------------------
-    # FECHA/HORA DE CREACIÓN
-    # creationDate también viene en UTC.
-    #
-    # La conservamos en hora Lima para estudiar las citas
-    # solapadas y luego definir un desempate auditable.
-    # --------------------------------------------------------
+    # ========================================================
+    # CREACIÓN — UTC → LIMA
+    # ========================================================
 
     fecha_creacion_utc = pd.to_datetime(
         citas[
@@ -605,50 +698,540 @@ def consolidar_citas(
         )
     )
 
-    # --------------------------------------------------------
-    # RESUMEN
-    # --------------------------------------------------------
+    # ========================================================
+    # CALL CENTER — FUENTE OFICIAL DEL PROYECTO
+    # ========================================================
 
-    total_unicas = len(
-        citas
+    citas[
+        "agente_canonico"
+    ] = citas[
+        "agente"
+    ].apply(
+        normalizar_persona_agenda
     )
 
-    eliminadas = int(
-        citas[
-            "is_deleted"
-        ].sum()
+    citas[
+        "canal_agenda"
+    ] = citas[
+        "agente_canonico"
+    ].apply(
+        clasificar_canal_agenda
     )
 
-    elegibles = citas.loc[
-        ~citas[
-            "is_deleted"
-        ]
-    ].copy()
-
-    sin_placa = int(
-        elegibles[
-            "placa_normalizada"
-        ].eq(
-            ""
-        ).sum()
+    citas[
+        "es_callcenter"
+    ] = citas[
+        "canal_agenda"
+    ].eq(
+        "CALL CENTER"
     )
 
     resumen = {
         "filas_raw":
             len(citas_raw),
+
         "citas_unicas":
-            total_unicas,
-        "eliminadas":
-            eliminadas,
-        "elegibles":
-            len(elegibles),
-        "sin_placa":
-            sin_placa,
+            len(citas),
     }
 
     return (
-        elegibles,
+        citas,
         resumen,
+    )
+
+
+def construir_universo_operativo_citas(
+    citas: pd.DataFrame,
+) -> tuple[
+    pd.DataFrame,
+    dict,
+    pd.DataFrame,
+]:
+    """
+    Construye el universo de citas que puede participar
+    en efectividad.
+
+    Orden de reglas:
+    1. excluir isDeleted;
+    2. excluir status cancelado;
+    3. deduplicar citas operativamente equivalentes;
+    4. priorizar Call Center;
+    5. si persiste empate, mayor appointment_number.
+
+    Devuelve:
+    - citas operativas;
+    - resumen de auditoría;
+    - detalle de citas excluidas/descartadas.
+    """
+
+    if citas.empty:
+
+        return (
+            citas.copy(),
+            {
+                "eliminadas_isdeleted": 0,
+                "canceladas_status": 0,
+                "antes_deduplicacion": 0,
+                "grupos_duplicados": 0,
+                "descartadas_duplicacion": 0,
+                "ganadores_callcenter": 0,
+                "ganadores_mayor_id": 0,
+                "operativas": 0,
+                "sin_placa": 0,
+            },
+            pd.DataFrame(),
+        )
+
+    base = citas.copy()
+
+    auditoria = []
+
+    # ========================================================
+    # 1. ISDELETED
+    # ========================================================
+
+    eliminadas = base.loc[
+        base[
+            "is_deleted"
+        ]
+    ].copy()
+
+    for fila in eliminadas.itertuples(
+        index=False
+    ):
+
+        auditoria.append(
+            {
+                "id_cita":
+                    fila.id_cita,
+
+                "appointment_number":
+                    fila.appointment_number,
+
+                "placa":
+                    fila.placa,
+
+                "fecha_cita":
+                    fila.fecha_cita,
+
+                "agente":
+                    fila.agente,
+
+                "motivos":
+                    fila.motivos,
+
+                "status":
+                    fila.status,
+
+                "accion":
+                    "EXCLUIDA",
+
+                "criterio":
+                    "IS_DELETED",
+
+                "id_cita_ganadora":
+                    None,
+            }
+        )
+
+    base = base.loc[
+        ~base[
+            "is_deleted"
+        ]
+    ].copy()
+
+    # ========================================================
+    # 2. CANCELADAS
+    # ========================================================
+
+    canceladas = base.loc[
+        base[
+            "es_cancelada_status"
+        ]
+    ].copy()
+
+    for fila in canceladas.itertuples(
+        index=False
+    ):
+
+        auditoria.append(
+            {
+                "id_cita":
+                    fila.id_cita,
+
+                "appointment_number":
+                    fila.appointment_number,
+
+                "placa":
+                    fila.placa,
+
+                "fecha_cita":
+                    fila.fecha_cita,
+
+                "agente":
+                    fila.agente,
+
+                "motivos":
+                    fila.motivos,
+
+                "status":
+                    fila.status,
+
+                "accion":
+                    "EXCLUIDA",
+
+                "criterio":
+                    "STATUS_CANCELADO",
+
+                "id_cita_ganadora":
+                    None,
+            }
+        )
+
+    base = base.loc[
+        ~base[
+            "es_cancelada_status"
+        ]
+    ].copy()
+
+    cantidad_antes_deduplicacion = len(
+        base
+    )
+
+    # ========================================================
+    # 3. CLAVE OPERATIVA
+    # ========================================================
+
+    base[
+        "_clave_fecha_hora"
+    ] = base[
+        "fecha_hora_cita_lima"
+    ]
+
+    clave_completa = (
+        base[
+            "placa_normalizada"
+        ].ne("")
+        &
+        base[
+            "telefono_normalizado"
+        ].ne("")
+        &
+        base[
+            "motivo_normalizado"
+        ].ne("")
+        &
+        base[
+            "_clave_fecha_hora"
+        ].notna()
+    )
+
+    candidatos = base.loc[
+        clave_completa
+    ].copy()
+
+    incompletos = base.loc[
+        ~clave_completa
+    ].copy()
+
+    claves_grupo = [
+        "placa_normalizada",
+        "telefono_normalizado",
+        "_clave_fecha_hora",
+        "motivo_normalizado",
+    ]
+
+    # ========================================================
+    # 4. IDENTIFICAR GRUPOS DUPLICADOS
+    # ========================================================
+
+    tamanos = (
+        candidatos
+        .groupby(
+            claves_grupo,
+            dropna=False,
+        )
+        .size()
+    )
+
+    grupos_duplicados = int(
+        (
+            tamanos > 1
+        ).sum()
+    )
+
+    candidatos[
+        "_appointment_number_num"
+    ] = pd.to_numeric(
+        candidatos[
+            "appointment_number"
+        ],
+        errors="coerce",
+    )
+
+    # Solo los grupos duplicados necesitan realmente
+    # appointmentNumber para el desempate.
+    claves_duplicadas = set(
+        tamanos.loc[
+            tamanos > 1
+        ].index.tolist()
+    )
+
+    if claves_duplicadas:
+
+        mascara_grupo_duplicado = (
+            candidatos.apply(
+                lambda fila:
+                    (
+                        fila[
+                            "placa_normalizada"
+                        ],
+                        fila[
+                            "telefono_normalizado"
+                        ],
+                        fila[
+                            "_clave_fecha_hora"
+                        ],
+                        fila[
+                            "motivo_normalizado"
+                        ],
+                    )
+                    in claves_duplicadas,
+                axis=1,
+            )
+        )
+
+        invalidos = candidatos.loc[
+            mascara_grupo_duplicado
+            &
+            candidatos[
+                "_appointment_number_num"
+            ].isna()
+        ]
+
+        if not invalidos.empty:
+
+            raise ValueError(
+                "Existen citas duplicadas cuyo "
+                "appointmentNumber no puede convertirse "
+                "a número. Muestra: "
+                f"{invalidos['appointment_number'].head(10).tolist()}"
+            )
+
+    # ========================================================
+    # 5. RESOLVER CADA GRUPO
+    # ========================================================
+
+    ganadores = []
+
+    ganadores_callcenter = 0
+    ganadores_mayor_id = 0
+
+    for _, grupo in candidatos.groupby(
+        claves_grupo,
+        dropna=False,
+        sort=False,
+    ):
+
+        if len(grupo) == 1:
+
+            ganadores.append(
+                grupo.iloc[0]
+            )
+
+            continue
+
+        grupo = grupo.copy()
+
+        cantidad_callcenter = int(
+            grupo[
+                "es_callcenter"
+            ].sum()
+        )
+
+        if cantidad_callcenter > 0:
+
+            elegibles_ganador = grupo.loc[
+                grupo[
+                    "es_callcenter"
+                ]
+            ].copy()
+
+            criterio = (
+                "PRIORIDAD_CALLCENTER"
+            )
+
+            ganadores_callcenter += 1
+
+        else:
+
+            elegibles_ganador = (
+                grupo.copy()
+            )
+
+            criterio = (
+                "MAYOR_APPOINTMENT_NUMBER"
+            )
+
+            ganadores_mayor_id += 1
+
+        ganador = (
+            elegibles_ganador
+            .sort_values(
+                "_appointment_number_num",
+                ascending=False,
+                kind="stable",
+            )
+            .iloc[0]
+        )
+
+        ganadores.append(
+            ganador
+        )
+
+        perdedores = grupo.loc[
+            grupo[
+                "id_cita"
+            ].ne(
+                ganador[
+                    "id_cita"
+                ]
+            )
+        ]
+
+        for fila in perdedores.itertuples(
+            index=False
+        ):
+
+            auditoria.append(
+                {
+                    "id_cita":
+                        fila.id_cita,
+
+                    "appointment_number":
+                        fila.appointment_number,
+
+                    "placa":
+                        fila.placa,
+
+                    "fecha_cita":
+                        fila.fecha_cita,
+
+                    "agente":
+                        fila.agente,
+
+                    "motivos":
+                        fila.motivos,
+
+                    "status":
+                        fila.status,
+
+                    "accion":
+                        "DESCARTADA",
+
+                    "criterio":
+                        criterio,
+
+                    "id_cita_ganadora":
+                        ganador[
+                            "id_cita"
+                        ],
+                }
+            )
+
+    # ========================================================
+    # 6. REUNIR GANADORES + CLAVES INCOMPLETAS
+    # ========================================================
+
+    if ganadores:
+
+        ganadores_df = pd.DataFrame(
+            ganadores
+        )
+
+    else:
+
+        ganadores_df = candidatos.iloc[
+            0:0
+        ].copy()
+
+    operativas = pd.concat(
+        [
+            ganadores_df,
+            incompletos,
+        ],
+        ignore_index=True,
+    )
+
+    operativas = operativas.drop(
+        columns=[
+            "_clave_fecha_hora",
+            "_appointment_number_num",
+        ],
+        errors="ignore",
+    )
+
+    operativas = (
+        operativas
+        .sort_values(
+            [
+                "fecha_hora_cita_lima",
+                "appointment_number",
+            ],
+            kind="stable",
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+    auditoria_df = pd.DataFrame(
+        auditoria
+    )
+
+    resumen = {
+        "eliminadas_isdeleted":
+            len(eliminadas),
+
+        "canceladas_status":
+            len(canceladas),
+
+        "antes_deduplicacion":
+            cantidad_antes_deduplicacion,
+
+        "grupos_duplicados":
+            grupos_duplicados,
+
+        "descartadas_duplicacion":
+            (
+                cantidad_antes_deduplicacion
+                -
+                len(operativas)
+            ),
+
+        "ganadores_callcenter":
+            ganadores_callcenter,
+
+        "ganadores_mayor_id":
+            ganadores_mayor_id,
+
+        "operativas":
+            len(operativas),
+
+        "sin_placa":
+            int(
+                operativas[
+                    "placa_normalizada"
+                ].eq(
+                    ""
+                ).sum()
+            ),
+    }
+
+    return (
+        operativas,
+        resumen,
+        auditoria_df,
     )
 
 # ============================================================
@@ -1066,36 +1649,40 @@ def calcular_nivel_1(
 
         misma placa + misma fecha.
 
+    Recibe exclusivamente el universo operativo de citas.
+
     Reglas:
-    - Una presencia solo puede acreditar una cita.
-    - Una cita solo puede recibir una presencia.
-    - Se conserva todo el universo de agentes.
-    - Call Center se identifica únicamente como dimensión
-      para reportería posterior.
-    - Si varias citas de la misma placa/fecha pertenecen
-      al mismo agente y exactamente una corresponde a
-      Preventivo, se prioriza Preventivo.
-    - Si la ambigüedad continúa, queda pendiente para
-      resolución manual.
+    - una presencia solo puede acreditar una cita;
+    - una cita solo puede recibir una presencia;
+    - se conserva todo el universo de agentes;
+    - Call Center ya viene clasificado desde la fuente
+      oficial del proyecto;
+    - si varias citas válidas de la misma placa/fecha
+      pertenecen al mismo agente y exactamente una es
+      Preventivo, se prioriza Preventivo;
+    - si persiste la ambigüedad, queda para decisión manual.
     """
 
     resultado = citas.copy()
 
-    # --------------------------------------------------------
-    # IDENTIFICAR AGENTES CALL CENTER
-    # --------------------------------------------------------
+    # ========================================================
+    # VALIDACIÓN
+    # ========================================================
 
-    resultado[
+    if (
         "es_callcenter"
-    ] = resultado[
-        "agente"
-    ].isin(
-        AGENTES_CALLCENTER
-    )
+        not in resultado.columns
+    ):
 
-    # --------------------------------------------------------
-    # IDENTIFICAR PERÍODO EVALUADO
-    # --------------------------------------------------------
+        raise ValueError(
+            "Las citas recibidas por calcular_nivel_1 "
+            "no contienen 'es_callcenter'. "
+            "Primero debe construirse el universo operativo."
+        )
+
+    # ========================================================
+    # PERÍODO EVALUADO
+    # ========================================================
 
     resultado[
         "en_periodo_evaluado"
@@ -1110,9 +1697,9 @@ def calcular_nivel_1(
             )
     )
 
-    # --------------------------------------------------------
-    # PREPARAR EVIDENCIA
-    # --------------------------------------------------------
+    # ========================================================
+    # EVIDENCIA
+    # ========================================================
 
     evidencia = presencias[
         [
@@ -1142,9 +1729,9 @@ def calcular_nivel_1(
         how="left",
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # ESTADOS INICIALES
-    # --------------------------------------------------------
+    # ========================================================
 
     resultado[
         "estado_nivel_1"
@@ -1158,20 +1745,18 @@ def calcular_nivel_1(
         "es_ambigua"
     ] = False
 
-    tiene_presencia = resultado[
-        "fuente"
-    ].notna()
-
     candidatos = resultado.loc[
-        tiene_presencia
+        resultado[
+            "fuente"
+        ].notna()
     ].copy()
 
     if candidatos.empty:
         return resultado
 
-    # --------------------------------------------------------
-    # RESOLVER CADA PRESENCIA PLACA + FECHA
-    # --------------------------------------------------------
+    # ========================================================
+    # RESOLVER PRESENCIA POR PLACA + FECHA
+    # ========================================================
 
     for (
         placa,
@@ -1187,7 +1772,7 @@ def calcular_nivel_1(
         indices = grupo.index.tolist()
 
         # ----------------------------------------------------
-        # CASO 1 — UNA SOLA CITA
+        # UNA SOLA CITA
         # ----------------------------------------------------
 
         if len(indices) == 1:
@@ -1207,18 +1792,14 @@ def calcular_nivel_1(
             continue
 
         # ----------------------------------------------------
-        # CASO 2 — PRIORIDAD POR PERÍODO
-        #
-        # Esta protección será especialmente útil cuando
-        # posteriormente ampliemos B/C por tolerancias X/Y
-        # y entren citas de meses vecinos.
+        # PRIORIDAD PERÍODO
         # ----------------------------------------------------
 
         grupo_periodo = grupo.loc[
             grupo[
                 "en_periodo_evaluado"
             ]
-        ].copy()
+        ]
 
         if len(grupo_periodo) == 1:
 
@@ -1229,7 +1810,8 @@ def calcular_nivel_1(
             indices_perdedores = [
                 indice
                 for indice in indices
-                if indice != indice_ganador
+                if indice
+                != indice_ganador
             ]
 
             resultado.loc[
@@ -1257,7 +1839,7 @@ def calcular_nivel_1(
             continue
 
         # ----------------------------------------------------
-        # CASO 3 — MISMO AGENTE + PREVENTIVO
+        # MISMO AGENTE + PREVENTIVO
         # ----------------------------------------------------
 
         agentes = (
@@ -1342,7 +1924,7 @@ def calcular_nivel_1(
                 continue
 
         # ----------------------------------------------------
-        # CASO 4 — AMBIGÜEDAD REAL
+        # AMBIGÜEDAD REAL
         # ----------------------------------------------------
 
         resultado.loc[
@@ -1989,7 +2571,1023 @@ def explorar_nivel_2(
     return exploracion
 
 
+def construir_resultado_efectividad(
+    citas: pd.DataFrame,
+    matches: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Combina el universo completo de citas operativas
+    con los matches N1/N2/N3.
 
+    Las citas sin presencia quedan identificadas
+    explícitamente.
+    """
+
+    resultado = citas.copy()
+
+    columnas_match = [
+        "id_cita",
+        "presencia_id",
+        "fecha_visita",
+        "diferencia_dias",
+        "nivel_efectividad",
+        "estado_efectividad",
+        "fuente",
+        "criterio_matching",
+        "persona_creditada",
+        "requiere_revision_manual",
+    ]
+
+    if matches.empty:
+
+        for columna in columnas_match[1:]:
+            resultado[
+                columna
+            ] = pd.NA
+
+    else:
+
+        resultado = resultado.merge(
+            matches[
+                columnas_match
+            ],
+            on="id_cita",
+            how="left",
+            validate="one_to_one",
+        )
+
+    resultado[
+        "estado_efectividad"
+    ] = resultado[
+        "estado_efectividad"
+    ].fillna(
+        "SIN_PRESENCIA"
+    )
+
+    resultado[
+        "persona_creditada"
+    ] = resultado[
+        "persona_creditada"
+    ].fillna(
+        resultado[
+            "agente"
+        ]
+    )
+
+    resultado[
+        "requiere_revision_manual"
+    ] = (
+        resultado[
+            "requiere_revision_manual"
+        ]
+        .fillna(False)
+        .astype(bool)
+    )
+
+    return resultado
+
+
+def imprimir_resultado_matching(
+    resultado: pd.DataFrame,
+) -> None:
+    """
+    Imprime el resultado consolidado de efectividad
+    N1 / N2 / N3.
+    """
+
+    print()
+    print("=" * 88)
+    print(
+        "EFECTIVIDAD — MATCHING GLOBAL"
+    )
+    print("=" * 88)
+
+    total = len(
+        resultado
+    )
+
+    nivel_1 = int(
+        resultado[
+            "estado_efectividad"
+        ].eq(
+            "EFECTIVA_NIVEL_1"
+        ).sum()
+    )
+
+    nivel_2 = int(
+        resultado[
+            "estado_efectividad"
+        ].eq(
+            "EFECTIVA_NIVEL_2"
+        ).sum()
+    )
+
+    nivel_3 = int(
+        resultado[
+            "estado_efectividad"
+        ].eq(
+            "EFECTIVA_NIVEL_3"
+        ).sum()
+    )
+
+    sin_presencia = int(
+        resultado[
+            "estado_efectividad"
+        ].eq(
+            "SIN_PRESENCIA"
+        ).sum()
+    )
+
+    revision_manual = int(
+        resultado[
+            "requiere_revision_manual"
+        ].sum()
+    )
+
+    efectivas = (
+        nivel_1
+        +
+        nivel_2
+        +
+        nivel_3
+    )
+
+    porcentaje = (
+        efectivas
+        /
+        total
+        *
+        100
+        if total
+        else 0
+    )
+
+    print(
+        f"Citas operativas                  "
+        f"{total:>10,}"
+    )
+
+    print(
+        f"Efectivas Nivel 1                 "
+        f"{nivel_1:>10,}"
+    )
+
+    print(
+        f"Efectivas Nivel 2                 "
+        f"{nivel_2:>10,}"
+    )
+
+    print(
+        f"Efectivas Nivel 3                 "
+        f"{nivel_3:>10,}"
+    )
+
+    print(
+        f"Efectivas totales                 "
+        f"{efectivas:>10,}"
+    )
+
+    print(
+        f"Sin presencia                     "
+        f"{sin_presencia:>10,}"
+    )
+
+    print(
+        f"Requieren revisión manual         "
+        f"{revision_manual:>10,}"
+    )
+
+    print(
+        f"Efectividad total                 "
+        f"{porcentaje:>9.1f}%"
+    )
+
+    # ========================================================
+    # POR AGENTE
+    # ========================================================
+
+    resumen = (
+        resultado
+        .groupby(
+            "agente",
+            dropna=False,
+        )
+        .agg(
+            citas=(
+                "id_cita",
+                "count",
+            ),
+
+            nivel_1=(
+                "estado_efectividad",
+                lambda s:
+                    s.eq(
+                        "EFECTIVA_NIVEL_1"
+                    ).sum(),
+            ),
+
+            nivel_2=(
+                "estado_efectividad",
+                lambda s:
+                    s.eq(
+                        "EFECTIVA_NIVEL_2"
+                    ).sum(),
+            ),
+
+            nivel_3=(
+                "estado_efectividad",
+                lambda s:
+                    s.eq(
+                        "EFECTIVA_NIVEL_3"
+                    ).sum(),
+            ),
+
+            sin_presencia=(
+                "estado_efectividad",
+                lambda s:
+                    s.eq(
+                        "SIN_PRESENCIA"
+                    ).sum(),
+            ),
+
+            revision_manual=(
+                "requiere_revision_manual",
+                "sum",
+            ),
+        )
+        .reset_index()
+    )
+
+    resumen[
+        "efectivas"
+    ] = (
+        resumen[
+            "nivel_1"
+        ]
+        +
+        resumen[
+            "nivel_2"
+        ]
+        +
+        resumen[
+            "nivel_3"
+        ]
+    )
+
+    resumen[
+        "efectividad_pct"
+    ] = (
+        resumen[
+            "efectivas"
+        ]
+        /
+        resumen[
+            "citas"
+        ]
+        *
+        100
+    ).round(
+        1
+    )
+
+    resumen = resumen.sort_values(
+        "citas",
+        ascending=False,
+    )
+
+    print()
+    print("-" * 88)
+    print(
+        "EFECTIVIDAD POR AGENTE"
+    )
+    print("-" * 88)
+
+    print(
+        resumen.to_string(
+            index=False
+        )
+    )
+
+    # ========================================================
+    # REVISIONES
+    # ========================================================
+
+    revisar = resultado.loc[
+        resultado[
+            "requiere_revision_manual"
+        ]
+    ].copy()
+
+    if not revisar.empty:
+
+        print()
+        print("-" * 88)
+        print(
+            "CASOS PARA REVISIÓN MANUAL"
+        )
+        print("-" * 88)
+
+        columnas = [
+            "appointment_number",
+            "placa_normalizada",
+            "fecha_cita",
+            "agente",
+            "motivos",
+            "fecha_visita",
+            "diferencia_dias",
+            "nivel_efectividad",
+            "presencia_id",
+        ]
+
+        print(
+            revisar[
+                columnas
+            ]
+            .to_string(
+                index=False
+            )
+        )
+
+
+def auditar_nivel_1_antiguo_vs_global(
+    resultado_nivel_1: pd.DataFrame,
+    matches_globales: pd.DataFrame,
+) -> None:
+    """
+    Compara las citas consideradas efectivas Nivel 1
+    por el método antiguo contra las asignadas como
+    Nivel 1 por el matching global.
+
+    Permite detectar:
+    - N1 antiguo que dejó de ser N1;
+    - N1 nuevo que antes no era efectivo;
+    - presencia finalmente utilizada por la cita afectada.
+    """
+
+    print()
+    print("=" * 96)
+    print(
+        "AUDITORÍA — NIVEL 1 ANTIGUO VS MATCHING GLOBAL"
+    )
+    print("=" * 96)
+
+    antiguos = (
+        resultado_nivel_1.loc[
+            resultado_nivel_1[
+                "estado_nivel_1"
+            ].eq(
+                "EFECTIVA_NIVEL_1"
+            )
+        ]
+        .copy()
+    )
+
+    nuevos = (
+        matches_globales.loc[
+            matches_globales[
+                "nivel_efectividad"
+            ].eq(1)
+        ]
+        .copy()
+    )
+
+    ids_antiguos = set(
+        antiguos[
+            "id_cita"
+        ]
+    )
+
+    ids_nuevos = set(
+        nuevos[
+            "id_cita"
+        ]
+    )
+
+    perdieron_n1 = (
+        ids_antiguos
+        -
+        ids_nuevos
+    )
+
+    ganaron_n1 = (
+        ids_nuevos
+        -
+        ids_antiguos
+    )
+
+    print(
+        f"N1 método antiguo                  "
+        f"{len(ids_antiguos):>10,}"
+    )
+
+    print(
+        f"N1 matching global                "
+        f"{len(ids_nuevos):>10,}"
+    )
+
+    print(
+        f"Antiguos N1 que dejaron de ser N1 "
+        f"{len(perdieron_n1):>10,}"
+    )
+
+    print(
+        f"Nuevos N1 no presentes antes      "
+        f"{len(ganaron_n1):>10,}"
+    )
+
+    # ========================================================
+    # ANTIGUOS N1 DESPLAZADOS
+    # ========================================================
+
+    if perdieron_n1:
+
+        afectados = (
+            antiguos.loc[
+                antiguos[
+                    "id_cita"
+                ].isin(
+                    perdieron_n1
+                )
+            ]
+            .copy()
+        )
+
+        estado_final = (
+            matches_globales[
+                [
+                    "id_cita",
+                    "presencia_id",
+                    "fecha_visita",
+                    "diferencia_dias",
+                    "nivel_efectividad",
+                    "estado_efectividad",
+                    "persona_creditada",
+                ]
+            ]
+            .rename(
+                columns={
+                    "presencia_id":
+                        "presencia_global",
+
+                    "fecha_visita":
+                        "fecha_visita_global",
+
+                    "diferencia_dias":
+                        "diferencia_global",
+
+                    "nivel_efectividad":
+                        "nivel_global",
+                }
+            )
+        )
+
+        afectados = afectados.merge(
+            estado_final,
+            on="id_cita",
+            how="left",
+        )
+
+        print()
+        print("-" * 96)
+        print(
+            "NIVEL 1 ANTIGUO QUE FUE DESPLAZADO"
+        )
+        print("-" * 96)
+
+        columnas = [
+            "appointment_number",
+            "placa_normalizada",
+            "fecha_cita",
+            "agente",
+            "motivos",
+            "fuente",
+            "presencia_global",
+            "fecha_visita_global",
+            "diferencia_global",
+            "nivel_global",
+        ]
+
+        columnas = [
+            columna
+            for columna in columnas
+            if columna in afectados.columns
+        ]
+
+        print(
+            afectados[
+                columnas
+            ].to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # NUEVOS N1
+    # ========================================================
+
+    if ganaron_n1:
+
+        ganadores = (
+            nuevos.loc[
+                nuevos[
+                    "id_cita"
+                ].isin(
+                    ganaron_n1
+                )
+            ]
+            .copy()
+        )
+
+        print()
+        print("-" * 96)
+        print(
+            "NUEVOS NIVEL 1 DEL MATCHING GLOBAL"
+        )
+        print("-" * 96)
+
+        columnas = [
+            "appointment_number",
+            "placa_normalizada",
+            "fecha_cita",
+            "agente_original",
+            "fecha_visita",
+            "presencia_id",
+        ]
+
+        print(
+            ganadores[
+                columnas
+            ].to_string(
+                index=False
+            )
+        )
+
+
+def imprimir_detalle_revisiones_matching(
+    resultado_matching: pd.DataFrame,
+    citas: pd.DataFrame,
+    presencias: pd.DataFrame,
+) -> None:
+    """
+    Para cada match marcado para revisión manual,
+    reconstruye todas las citas de la misma placa que
+    podían competir por esa presencia dentro de N1/N2/N3.
+
+    Esta función es solo diagnóstica.
+    """
+
+    revisiones = resultado_matching.loc[
+        resultado_matching[
+            "requiere_revision_manual"
+        ]
+    ].copy()
+
+    if revisiones.empty:
+        return
+
+    print()
+    print("=" * 96)
+    print(
+        "DETALLE DE CONFLICTOS — REVISIÓN MANUAL"
+    )
+    print("=" * 96)
+
+    for _, match in revisiones.iterrows():
+
+        placa = match[
+            "placa_normalizada"
+        ]
+
+        fecha_visita = pd.to_datetime(
+            match[
+                "fecha_visita"
+            ]
+        ).date()
+
+        citas_placa = citas.loc[
+            citas[
+                "placa_normalizada"
+            ].eq(
+                placa
+            )
+        ].copy()
+
+        registros = []
+
+        for _, cita in citas_placa.iterrows():
+
+            fecha_cita = pd.to_datetime(
+                cita[
+                    "fecha_cita"
+                ]
+            ).date()
+
+            diferencia = (
+                fecha_visita
+                -
+                fecha_cita
+            ).days
+
+            if diferencia == 0:
+                nivel = 1
+
+            elif (
+                diferencia == -1
+                or 1 <= diferencia <= 3
+            ):
+                nivel = 2
+
+            elif (
+                -4 <= diferencia <= -2
+                or 4 <= diferencia <= 7
+            ):
+                nivel = 3
+
+            else:
+                continue
+
+            registros.append(
+                {
+                    "appointment_number":
+                        cita[
+                            "appointment_number"
+                        ],
+
+                    "id_cita":
+                        cita[
+                            "id_cita"
+                        ],
+
+                    "placa":
+                        placa,
+
+                    "fecha_cita":
+                        fecha_cita,
+
+                    "fecha_visita":
+                        fecha_visita,
+
+                    "diferencia_dias":
+                        diferencia,
+
+                    "nivel":
+                        nivel,
+
+                    "agente":
+                        cita[
+                            "agente"
+                        ],
+
+                    "motivos":
+                        cita[
+                            "motivos"
+                        ],
+
+                    "fecha_creacion":
+                        cita[
+                            "fecha_creacion_lima"
+                        ],
+
+                    "es_match_actual":
+                        (
+                            cita[
+                                "id_cita"
+                            ]
+                            ==
+                            match[
+                                "id_cita"
+                            ]
+                        ),
+                }
+            )
+
+        detalle = pd.DataFrame(
+            registros
+        )
+
+        if detalle.empty:
+            continue
+
+        detalle = detalle.sort_values(
+            [
+                "nivel",
+                "diferencia_dias",
+                "fecha_creacion",
+                "appointment_number",
+            ],
+            kind="stable",
+        )
+
+        print()
+        print(
+            f"Presencia: "
+            f"{match['presencia_id']}"
+        )
+
+        print(
+            f"Ganador actual: "
+            f"{match['appointment_number']} "
+            f"— {match['agente_original']}"
+        )
+
+        print()
+
+        print(
+            detalle.to_string(
+                index=False
+            )
+        )
+
+def auditar_placa_matching(
+    placa: str,
+    citas: pd.DataFrame,
+    presencias: pd.DataFrame,
+    matches: pd.DataFrame,
+) -> None:
+    """
+    Muestra todas las citas, todas las presencias y los matches
+    finales de una placa.
+
+    Sirve para entender redistribuciones del matching global.
+    """
+
+    placa = str(
+        placa
+    ).strip().upper()
+
+    citas_placa = (
+        citas.loc[
+            citas[
+                "placa_normalizada"
+            ].eq(
+                placa
+            )
+        ]
+        .copy()
+        .sort_values(
+            [
+                "fecha_cita",
+                "appointment_number",
+            ],
+            kind="stable",
+        )
+    )
+
+    presencias_placa = (
+        presencias.loc[
+            presencias[
+                "placa_normalizada"
+            ].eq(
+                placa
+            )
+        ]
+        .copy()
+        .sort_values(
+            "fecha_visita",
+            kind="stable",
+        )
+    )
+
+    matches_placa = (
+        matches.loc[
+            matches[
+                "placa_normalizada"
+            ].eq(
+                placa
+            )
+        ]
+        .copy()
+        .sort_values(
+            [
+                "fecha_cita",
+                "appointment_number",
+            ],
+            kind="stable",
+        )
+    )
+
+    print()
+    print("=" * 100)
+    print(
+        f"AUDITORÍA COMPLETA DE PLACA — {placa}"
+    )
+    print("=" * 100)
+
+    # ========================================================
+    # CITAS
+    # ========================================================
+
+    print()
+    print("-" * 100)
+    print("CITAS")
+    print("-" * 100)
+
+    if citas_placa.empty:
+
+        print("Sin citas.")
+
+    else:
+
+        columnas = [
+            "appointment_number",
+            "id_cita",
+            "fecha_cita",
+            "fecha_creacion_lima",
+            "agente",
+            "motivos",
+        ]
+
+        print(
+            citas_placa[
+                columnas
+            ].to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # PRESENCIAS
+    # ========================================================
+
+    print()
+    print("-" * 100)
+    print("PRESENCIAS")
+    print("-" * 100)
+
+    if presencias_placa.empty:
+
+        print("Sin presencias.")
+
+    else:
+
+        columnas = [
+            "presencia_id",
+            "fecha_visita",
+            "fuente",
+        ]
+
+        columnas = [
+            columna
+            for columna in columnas
+            if columna
+            in presencias_placa.columns
+        ]
+
+        print(
+            presencias_placa[
+                columnas
+            ].to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # TODAS LAS COMBINACIONES POSIBLES
+    # ========================================================
+
+    print()
+    print("-" * 100)
+    print("COMBINACIONES VÁLIDAS N1 / N2 / N3")
+    print("-" * 100)
+
+    combinaciones = []
+
+    for _, cita in citas_placa.iterrows():
+
+        fecha_cita = pd.to_datetime(
+            cita[
+                "fecha_cita"
+            ]
+        ).date()
+
+        for _, presencia in (
+            presencias_placa.iterrows()
+        ):
+
+            fecha_visita = pd.to_datetime(
+                presencia[
+                    "fecha_visita"
+                ]
+            ).date()
+
+            diferencia = (
+                fecha_visita
+                -
+                fecha_cita
+            ).days
+
+            if diferencia == 0:
+                nivel = 1
+
+            elif (
+                diferencia == -1
+                or 1 <= diferencia <= 3
+            ):
+                nivel = 2
+
+            elif (
+                -4 <= diferencia <= -2
+                or 4 <= diferencia <= 7
+            ):
+                nivel = 3
+
+            else:
+                continue
+
+            combinaciones.append(
+                {
+                    "appointment_number":
+                        cita[
+                            "appointment_number"
+                        ],
+
+                    "fecha_cita":
+                        fecha_cita,
+
+                    "agente":
+                        cita[
+                            "agente"
+                        ],
+
+                    "motivos":
+                        cita[
+                            "motivos"
+                        ],
+
+                    "presencia_id":
+                        presencia[
+                            "presencia_id"
+                        ],
+
+                    "fecha_visita":
+                        fecha_visita,
+
+                    "diferencia_dias":
+                        diferencia,
+
+                    "nivel":
+                        nivel,
+                }
+            )
+
+    combinaciones_df = pd.DataFrame(
+        combinaciones
+    )
+
+    if combinaciones_df.empty:
+
+        print("Sin combinaciones válidas.")
+
+    else:
+
+        print(
+            combinaciones_df
+            .sort_values(
+                [
+                    "appointment_number",
+                    "nivel",
+                    "fecha_visita",
+                ],
+                kind="stable",
+            )
+            .to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # MATCHING FINAL
+    # ========================================================
+
+    print()
+    print("-" * 100)
+    print("MATCHING FINAL")
+    print("-" * 100)
+
+    if matches_placa.empty:
+
+        print("Ninguna cita terminó efectiva.")
+
+    else:
+
+        columnas = [
+            "appointment_number",
+            "agente_original",
+            "fecha_cita",
+            "presencia_id",
+            "fecha_visita",
+            "diferencia_dias",
+            "nivel_efectividad",
+            "estado_efectividad",
+        ]
+
+        print(
+            matches_placa[
+                columnas
+            ].to_string(
+                index=False
+            )
+        )
 
 # ============================================================
 # IMPRESIÓN
@@ -2265,6 +3863,175 @@ def imprimir_bloque(
         )
 
 
+def imprimir_auditoria_universo(
+    citas_logicas: pd.DataFrame,
+    resumen_universo: dict,
+    auditoria: pd.DataFrame,
+) -> None:
+
+    print()
+    print("=" * 72)
+    print(
+        "UNIVERSO OPERATIVO DE CITAS"
+    )
+    print("=" * 72)
+
+    valores = [
+        (
+            "Citas lógicas Key_merge",
+            len(
+                citas_logicas
+            ),
+        ),
+        (
+            "Excluidas isDeleted",
+            resumen_universo[
+                "eliminadas_isdeleted"
+            ],
+        ),
+        (
+            "Excluidas status cancelado",
+            resumen_universo[
+                "canceladas_status"
+            ],
+        ),
+        (
+            "Activas antes de deduplicar",
+            resumen_universo[
+                "antes_deduplicacion"
+            ],
+        ),
+        (
+            "Grupos duplicados operativos",
+            resumen_universo[
+                "grupos_duplicados"
+            ],
+        ),
+        (
+            "Citas descartadas duplicación",
+            resumen_universo[
+                "descartadas_duplicacion"
+            ],
+        ),
+        (
+            "Grupos ganados por Call Center",
+            resumen_universo[
+                "ganadores_callcenter"
+            ],
+        ),
+        (
+            "Grupos ganados por mayor ID",
+            resumen_universo[
+                "ganadores_mayor_id"
+            ],
+        ),
+        (
+            "Citas operativas finales",
+            resumen_universo[
+                "operativas"
+            ],
+        ),
+        (
+            "Operativas sin placa",
+            resumen_universo[
+                "sin_placa"
+            ],
+        ),
+    ]
+
+    for etiqueta, valor in valores:
+
+        print(
+            f"{etiqueta:<40}"
+            f"{valor:>10,}"
+        )
+
+    # ========================================================
+    # DISTRIBUCIÓN STATUS
+    # ========================================================
+
+    print()
+    print("-" * 72)
+    print(
+        "DISTRIBUCIÓN STATUS — CITAS LÓGICAS"
+    )
+    print("-" * 72)
+
+    distribucion_status = (
+        citas_logicas[
+            "status"
+        ]
+        .fillna(
+            "SIN_STATUS"
+        )
+        .astype(str)
+        .value_counts()
+        .rename_axis(
+            "status"
+        )
+        .reset_index(
+            name="citas"
+        )
+    )
+
+    print(
+        distribucion_status.to_string(
+            index=False
+        )
+    )
+
+    # ========================================================
+    # MUESTRA DE DESCARTES
+    # ========================================================
+
+    print()
+    print("-" * 72)
+    print(
+        "AUDITORÍA DE CITAS EXCLUIDAS / DESCARTADAS"
+    )
+    print("-" * 72)
+
+    if auditoria.empty:
+
+        print(
+            "No existen citas descartadas."
+        )
+
+        return
+
+    columnas = [
+        "appointment_number",
+        "placa",
+        "fecha_cita",
+        "agente",
+        "motivos",
+        "status",
+        "accion",
+        "criterio",
+        "id_cita_ganadora",
+    ]
+
+    print(
+        auditoria[
+            columnas
+        ]
+        .head(
+            100
+        )
+        .to_string(
+            index=False
+        )
+    )
+
+    if len(auditoria) > 100:
+
+        print()
+        print(
+            f"... mostrando 100 de "
+            f"{len(auditoria):,} registros."
+        )
+
+
 def imprimir_resultados(
     resumen_a: dict,
     resumen_b: dict,
@@ -2281,33 +4048,15 @@ def imprimir_resultados(
         "TABLA A — CITAS",
         [
             (
-                "Filas crudas",
+                "Filas crudas Databricks",
                 resumen_a[
                     "filas_raw"
                 ],
             ),
             (
-                "Citas únicas",
+                "Citas lógicas Key_merge",
                 resumen_a[
                     "citas_unicas"
-                ],
-            ),
-            (
-                "Citas eliminadas",
-                resumen_a[
-                    "eliminadas"
-                ],
-            ),
-            (
-                "Citas elegibles",
-                resumen_a[
-                    "elegibles"
-                ],
-            ),
-            (
-                "Elegibles sin placa",
-                resumen_a[
-                    "sin_placa"
                 ],
             ),
         ],
@@ -2785,8 +4534,24 @@ def main() -> None:
         hasta=hasta,
     )
 
-    citas, resumen_a = consolidar_citas(
-        citas_raw
+    citas_logicas, resumen_a = (
+        consolidar_citas(
+            citas_raw
+        )
+    )
+
+    (
+        citas,
+        resumen_universo,
+        auditoria_universo,
+    ) = construir_universo_operativo_citas(
+        citas_logicas
+    )
+
+    imprimir_auditoria_universo(
+        citas_logicas=citas_logicas,
+        resumen_universo=resumen_universo,
+        auditoria=auditoria_universo,
     )
 
     # ========================================================
@@ -2844,6 +4609,39 @@ def main() -> None:
     )
 
     # ========================================================
+    # MATCHING GLOBAL N1 / N2 / N3
+    # ========================================================
+
+    print()
+    print(
+        "🐿️ Calculando matching global "
+        "Nivel 1 / Nivel 2 / Nivel 3..."
+    )
+
+    matches = calcular_matching_efectividad(
+        citas=citas,
+        presencias=presencias,
+    )
+
+    auditar_placa_matching(
+        placa="DAQ057",
+        citas=citas,
+        presencias=presencias,
+        matches=matches,
+    )
+
+    resultado_matching = (
+        construir_resultado_efectividad(
+            citas=citas,
+            matches=matches,
+        )
+    )
+
+    imprimir_resultado_matching(
+        resultado_matching
+    )
+
+    # ========================================================
     # NIVEL 1
     #
     # Coincidencia exacta:
@@ -2858,6 +4656,17 @@ def main() -> None:
         presencias=presencias,
         desde=desde,
         hasta=hasta,
+    )
+
+    auditar_nivel_1_antiguo_vs_global(
+        resultado_nivel_1=resultado,
+        matches_globales=matches,
+    )
+
+    imprimir_detalle_revisiones_matching(
+        resultado_matching=matches,
+        citas=citas,
+        presencias=presencias,
     )
 
     # ========================================================
