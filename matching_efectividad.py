@@ -1069,11 +1069,19 @@ def marcar_revision_manual(
     candidatos: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Marca matches donde existe otra cita de otra persona con
-    exactamente el mismo nivel y distancia para esa presencia.
+    Marca únicamente conflictos reales entre personas.
 
-    No cambia el matching automáticamente.
-    Solo deja trazabilidad para revisión.
+    Un match requiere revisión manual cuando existe otra cita:
+
+    - para la misma presencia;
+    - con el mismo nivel;
+    - con la misma distancia temporal;
+    - de otra persona;
+    - y esa cita alternativa quedó SIN match.
+
+    Si ambas citas ya consiguieron presencias distintas,
+    no existe una disputa real por efectividad y no se
+    solicita revisión manual.
     """
 
     resultado = matches.copy()
@@ -1085,9 +1093,13 @@ def marcar_revision_manual(
     if resultado.empty:
         return resultado
 
-    for indice, match in (
-        resultado.iterrows()
-    ):
+    ids_matcheados = set(
+        resultado[
+            "id_cita"
+        ]
+    )
+
+    for indice, match in resultado.iterrows():
 
         alternativas = candidatos.loc[
             candidatos[
@@ -1129,6 +1141,12 @@ def marcar_revision_manual(
                     "agente"
                 ]
             )
+            &
+            ~candidatos[
+                "id_cita"
+            ].isin(
+                ids_matcheados
+            )
         ]
 
         if not alternativas.empty:
@@ -1139,7 +1157,6 @@ def marcar_revision_manual(
             ] = True
 
     return resultado
-
 
 # ============================================================
 # MOTOR COMPLETO

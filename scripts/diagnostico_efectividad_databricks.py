@@ -17,6 +17,24 @@ from clasificaciones import (
 )
 from matching_efectividad import (
     calcular_matching_efectividad,
+    construir_candidatos,
+)
+
+from efectividad_reportes import (
+    construir_detalle_efectividad,
+    validar_detalle_efectividad,
+    imprimir_auditoria_detalle,
+    construir_scorecards_operativos,
+    CONFIG_SCORECARD_2026,
+)
+
+from database import (
+    inicializar_base,
+    obtener_override_matching,
+    guardar_override_matching,
+    limpiar_conflictos_revision_matching,
+    guardar_conflicto_revision_matching,
+    cerrar_conflicto_revision_matching,
 )
 
 # ============================================================
@@ -1271,16 +1289,19 @@ def consolidar_cotizaciones(
     cotizaciones_raw: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict]:
 
+    columnas_salida = [
+        "placa_normalizada",
+        "fecha_visita",
+        "cotizaciones",
+        "numeros_cotizacion",
+        "tiene_cotizacion",
+    ]
+
     if cotizaciones_raw.empty:
 
         return (
             pd.DataFrame(
-                columns=[
-                    "placa_normalizada",
-                    "fecha_visita",
-                    "cotizaciones",
-                    "tiene_cotizacion",
-                ]
+                columns=columnas_salida
             ),
             {
                 "filas_raw": 0,
@@ -1337,6 +1358,28 @@ def consolidar_cotizaciones(
         ].notna()
     ].copy()
 
+    def agregar_documentos(
+        serie: pd.Series,
+    ) -> str:
+        valores = (
+            serie
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+
+        valores = [
+            valor
+            for valor in valores.unique()
+            if valor
+        ]
+
+        return ", ".join(
+            sorted(
+                valores
+            )
+        )
+
     presencia = (
         validos
         .groupby(
@@ -1354,6 +1397,10 @@ def consolidar_cotizaciones(
                         dropna=True
                     ),
             ),
+            numeros_cotizacion=(
+                "NumeroDocumento",
+                agregar_documentos,
+            ),
         )
     )
 
@@ -1364,19 +1411,23 @@ def consolidar_cotizaciones(
     resumen = {
         "filas_raw":
             len(df),
+
         "documentos":
             documentos,
+
         "presencias":
             len(presencia),
+
         "sin_placa":
             sin_placa,
     }
 
     return (
-        presencia,
+        presencia[
+            columnas_salida
+        ],
         resumen,
     )
-
 
 # ============================================================
 # TABLA C — ÓRDENES
@@ -1424,16 +1475,19 @@ def consolidar_ordenes(
     ordenes_raw: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict]:
 
+    columnas_salida = [
+        "placa_normalizada",
+        "fecha_visita",
+        "ordenes",
+        "numeros_orden",
+        "tiene_orden",
+    ]
+
     if ordenes_raw.empty:
 
         return (
             pd.DataFrame(
-                columns=[
-                    "placa_normalizada",
-                    "fecha_visita",
-                    "ordenes",
-                    "tiene_orden",
-                ]
+                columns=columnas_salida
             ),
             {
                 "filas_raw": 0,
@@ -1490,6 +1544,28 @@ def consolidar_ordenes(
         ].notna()
     ].copy()
 
+    def agregar_documentos(
+        serie: pd.Series,
+    ) -> str:
+        valores = (
+            serie
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+
+        valores = [
+            valor
+            for valor in valores.unique()
+            if valor
+        ]
+
+        return ", ".join(
+            sorted(
+                valores
+            )
+        )
+
     presencia = (
         validos
         .groupby(
@@ -1507,6 +1583,10 @@ def consolidar_ordenes(
                         dropna=True
                     ),
             ),
+            numeros_orden=(
+                "ID_OPERACION",
+                agregar_documentos,
+            ),
         )
     )
 
@@ -1517,16 +1597,21 @@ def consolidar_ordenes(
     resumen = {
         "filas_raw":
             len(df),
+
         "ordenes":
             ordenes_distintas,
+
         "presencias":
             len(presencia),
+
         "sin_placa":
             sin_placa,
     }
 
     return (
-        presencia,
+        presencia[
+            columnas_salida
+        ],
         resumen,
     )
 
@@ -1551,42 +1636,62 @@ def construir_presencias(
 
     presencias[
         "tiene_cotizacion"
-    ] = presencias[
-        "tiene_cotizacion"
-    ].fillna(
-        False
-    ).astype(
-        bool
+    ] = (
+        presencias[
+            "tiene_cotizacion"
+        ]
+        .fillna(False)
+        .astype(bool)
     )
 
     presencias[
         "tiene_orden"
-    ] = presencias[
-        "tiene_orden"
-    ].fillna(
-        False
-    ).astype(
-        bool
+    ] = (
+        presencias[
+            "tiene_orden"
+        ]
+        .fillna(False)
+        .astype(bool)
     )
 
     presencias[
         "cotizaciones"
-    ] = presencias[
-        "cotizaciones"
-    ].fillna(
-        0
-    ).astype(
-        int
+    ] = (
+        presencias[
+            "cotizaciones"
+        ]
+        .fillna(0)
+        .astype(int)
     )
 
     presencias[
         "ordenes"
-    ] = presencias[
-        "ordenes"
-    ].fillna(
-        0
-    ).astype(
-        int
+    ] = (
+        presencias[
+            "ordenes"
+        ]
+        .fillna(0)
+        .astype(int)
+    )
+
+    presencias[
+        "numeros_cotizacion"
+    ] = (
+        presencias[
+            "numeros_cotizacion"
+        ]
+        .fillna("")
+        .astype(str)
+    )
+
+    presencias[
+        "numeros_orden"
+    ] = (
+        presencias[
+            "numeros_orden"
+        ]
+        .fillna("")
+        .astype(str)
     )
 
     def determinar_fuente(
@@ -1611,13 +1716,6 @@ def construir_presencias(
         axis=1,
     )
 
-    # --------------------------------------------------------
-    # ID DETERMINÍSTICO DE PRESENCIA
-    #
-    # Una presencia real para nuestro modelo es:
-    # placa + fecha.
-    # --------------------------------------------------------
-
     presencias[
         "presencia_id"
     ] = (
@@ -1632,7 +1730,7 @@ def construir_presencias(
         ].astype(str)
     )
 
-    return presencias
+    return presencias    
 
 # ============================================================
 # EFECTIVIDAD NIVEL 1
@@ -4449,10 +4547,597 @@ def imprimir_resultados(
 # MAIN
 # ============================================================
 
+def resolver_revisiones_matching_terminal(
+    matches: pd.DataFrame,
+    citas: pd.DataFrame,
+    presencias: pd.DataFrame,
+    usuario_decision: str = "WALTHER_TERMINAL",
+    resolver_en_terminal: bool = True,
+) -> pd.DataFrame:
+    """
+    Resuelve conflictos reales del matching global.
+
+    Flujo:
+    1. reconstruye las candidatas válidas;
+    2. consulta decisiones manuales persistidas;
+    3. reutiliza automáticamente una decisión previa
+       cuando todavía es válida;
+    4. pregunta por terminal únicamente cuando no existe
+       una decisión reutilizable;
+    5. persiste la nueva elección en SQLite.
+
+    Esta función modifica únicamente el matching final.
+    No modifica citas ni presencias originales.
+    """
+
+    resultado = matches.copy()
+
+    limpiar_conflictos_revision_matching()
+
+    revisar = resultado.loc[
+        resultado[
+            "requiere_revision_manual"
+        ]
+    ].copy()
+
+    if revisar.empty:
+
+        print()
+        print(
+            "✅ No existen conflictos reales "
+            "por resolver manualmente."
+        )
+
+        return resultado
+
+    candidatos = construir_candidatos(
+        citas=citas,
+        presencias=presencias,
+    )
+
+    print()
+    print("=" * 88)
+    print(
+        "🐿️ RESOLUCIÓN MANUAL — MATCHING GLOBAL"
+    )
+    print("=" * 88)
+
+    print(
+        f"Conflictos pendientes: "
+        f"{len(revisar):,}"
+    )
+
+    def aplicar_decision(
+        indice_match,
+        elegida: pd.Series,
+        origen_decision: str,
+    ) -> None:
+        """
+        Aplica una candidata sobre la fila actual
+        del matching.
+        """
+
+        nivel = int(
+            elegida[
+                "nivel"
+            ]
+        )
+
+        distancia = int(
+            elegida[
+                "distancia"
+            ]
+        )
+
+        resultado.loc[
+            indice_match,
+            "id_cita",
+        ] = elegida[
+            "id_cita"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "appointment_number",
+        ] = elegida[
+            "appointment_number"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "placa_normalizada",
+        ] = elegida[
+            "placa_normalizada"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "agente_original",
+        ] = elegida[
+            "agente"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "persona_creditada",
+        ] = elegida[
+            "agente"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "fecha_cita",
+        ] = elegida[
+            "fecha_cita"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "presencia_id",
+        ] = elegida[
+            "presencia_id"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "fecha_visita",
+        ] = elegida[
+            "fecha_visita"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "diferencia_dias",
+        ] = elegida[
+            "diferencia_dias"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "nivel_efectividad",
+        ] = nivel
+
+        resultado.loc[
+            indice_match,
+            "estado_efectividad",
+        ] = (
+            f"EFECTIVA_NIVEL_{nivel}"
+        )
+
+        resultado.loc[
+            indice_match,
+            "fuente",
+        ] = elegida[
+            "fuente"
+        ]
+
+        resultado.loc[
+            indice_match,
+            "criterio_matching",
+        ] = (
+            f"NIVEL_{nivel}"
+            f"_DISTANCIA_{distancia}"
+            f"_{origen_decision}"
+        )
+
+        resultado.loc[
+            indice_match,
+            "requiere_revision_manual",
+        ] = False
+
+    for numero, (
+        indice_match,
+        match,
+    ) in enumerate(
+        revisar.iterrows(),
+        start=1,
+    ):
+
+        # ====================================================
+        # CITAS QUE YA OBTUVIERON OTRA PRESENCIA
+        # ====================================================
+
+        ids_matcheados = set(
+            resultado[
+                "id_cita"
+            ]
+        )
+
+        alternativas = candidatos.loc[
+            candidatos[
+                "presencia_id"
+            ].eq(
+                match[
+                    "presencia_id"
+                ]
+            )
+            &
+            candidatos[
+                "nivel"
+            ].eq(
+                match[
+                    "nivel_efectividad"
+                ]
+            )
+            &
+            candidatos[
+                "distancia"
+            ].eq(
+                abs(
+                    match[
+                        "diferencia_dias"
+                    ]
+                )
+            )
+            &
+            candidatos[
+                "id_cita"
+            ].ne(
+                match[
+                    "id_cita"
+                ]
+            )
+            &
+            candidatos[
+                "agente"
+            ].ne(
+                match[
+                    "agente_original"
+                ]
+            )
+            &
+            ~candidatos[
+                "id_cita"
+            ].isin(
+                ids_matcheados
+            )
+        ].copy()
+
+        # El match actual también forma parte de las opciones.
+        actual = candidatos.loc[
+            candidatos[
+                "id_cita"
+            ].eq(
+                match[
+                    "id_cita"
+                ]
+            )
+            &
+            candidatos[
+                "presencia_id"
+            ].eq(
+                match[
+                    "presencia_id"
+                ]
+            )
+        ].copy()
+
+        opciones = (
+            pd.concat(
+                [
+                    actual,
+                    alternativas,
+                ],
+                ignore_index=True,
+            )
+            .drop_duplicates(
+                subset=[
+                    "id_cita",
+                ]
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+
+        if len(
+            opciones
+        ) <= 1:
+
+            resultado.loc[
+                indice_match,
+                "requiere_revision_manual",
+            ] = False
+
+            continue
+
+        presencia_id = match[
+            "presencia_id"
+        ]
+
+        # ====================================================
+        # 1. BUSCAR DECISIÓN HISTÓRICA
+        # ====================================================
+
+        override = (
+            obtener_override_matching(
+                presencia_id
+            )
+        )
+
+        if override is not None:
+
+            candidata_guardada = (
+                opciones.loc[
+                    opciones[
+                        "id_cita"
+                    ]
+                    .astype(str)
+                    .eq(
+                        str(
+                            override[
+                                "id_cita_elegida"
+                            ]
+                        )
+                    )
+                ]
+            )
+
+            if len(
+                candidata_guardada
+            ) == 1:
+
+                elegida = (
+                    candidata_guardada
+                    .iloc[0]
+                )
+
+                aplicar_decision(
+                    indice_match=
+                        indice_match,
+
+                    elegida=
+                        elegida,
+
+                    origen_decision=
+                        "OVERRIDE_GUARDADO",
+                )
+
+                print()
+                print(
+                    "✅ Decisión previa aplicada "
+                    "automáticamente:"
+                )
+
+                print(
+                    f"   Presencia : "
+                    f"{presencia_id}"
+                )
+
+                print(
+                    f"   Cita      : #"
+                    f"{elegida['appointment_number']}"
+                )
+
+                print(
+                    f"   Agente    : "
+                    f"{elegida['agente']}"
+                )
+
+                continue
+
+            print()
+            print(
+                "⚠️ Existe una decisión guardada para "
+                f"{presencia_id}, pero la cita elegida "
+                "ya no pertenece al conjunto actual de "
+                "candidatas."
+            )
+
+            print(
+                "   Se solicitará una nueva decisión."
+            )
+
+        # ====================================================
+        # 2. PEDIR DECISIÓN
+        # ====================================================
+
+        print()
+        print("-" * 88)
+
+        print(
+            f"Conflicto "
+            f"{numero}/"
+            f"{len(revisar)}"
+        )
+
+        print(
+            f"Placa       : "
+            f"{match['placa_normalizada']}"
+        )
+
+        print(
+            f"Presencia   : "
+            f"{match['fecha_visita']}"
+        )
+
+        print(
+            f"Nivel       : "
+            f"{int(match['nivel_efectividad'])}"
+        )
+
+        print()
+        print(
+            "Citas candidatas:"
+        )
+
+        for posicion, fila in enumerate(
+            opciones.itertuples(
+                index=False
+            ),
+            start=1,
+        ):
+
+            fecha_hora = pd.to_datetime(
+                fila.fecha_hora_cita_lima,
+                errors="coerce",
+            )
+
+            if pd.notna(
+                fecha_hora
+            ):
+
+                cita_texto = (
+                    fecha_hora.strftime(
+                        "%d/%m/%Y %H:%M"
+                    )
+                )
+
+            else:
+
+                cita_texto = str(
+                    fila.fecha_cita
+                )
+
+            print()
+            print(
+                f"  {posicion}. "
+                f"Cita #"
+                f"{fila.appointment_number}"
+            )
+
+            print(
+                f"     Agente    : "
+                f"{fila.agente}"
+            )
+
+            print(
+                f"     Cita      : "
+                f"{cita_texto}"
+            )
+
+            print(
+                f"     Motivo    : "
+                f"{fila.motivos}"
+            )
+
+            print(
+                f"     Diferencia: "
+                f"{fila.diferencia_dias:+d} días"
+            )
+
+        print()
+        print(
+            "  0. Dejar pendiente"
+        )
+
+        while True:
+
+            respuesta = input(
+                "\nSeleccione la cita que "
+                "debe recibir la efectividad: "
+            ).strip()
+
+            if respuesta == "0":
+
+                print(
+                    "⚠️ Conflicto dejado pendiente."
+                )
+
+                break
+
+            if not respuesta.isdigit():
+
+                print(
+                    "Seleccione una opción válida."
+                )
+
+                continue
+
+            posicion = int(
+                respuesta
+            )
+
+            if not (
+                1
+                <= posicion
+                <= len(opciones)
+            ):
+
+                print(
+                    "Seleccione una opción válida."
+                )
+
+                continue
+
+            elegida = opciones.iloc[
+                posicion - 1
+            ]
+
+            aplicar_decision(
+                indice_match=
+                    indice_match,
+
+                elegida=
+                    elegida,
+
+                origen_decision=
+                    "RESOLUCION_MANUAL",
+            )
+
+            guardar_override_matching(
+                presencia_id=
+                    presencia_id,
+
+                id_cita_elegida=
+                    elegida[
+                        "id_cita"
+                    ],
+
+                appointment_number=
+                    elegida[
+                        "appointment_number"
+                    ],
+
+                persona_creditada=
+                    elegida[
+                        "agente"
+                    ],
+
+                canal_decision=
+                    "TERMINAL",
+
+                usuario_decision=
+                    usuario_decision,
+
+                motivo=
+                    "CONFLICTO_MATCHING_EFECTIVIDAD",
+            )
+
+            print(
+                f"✅ Efectividad asignada a "
+                f"cita #"
+                f"{elegida['appointment_number']}"
+            )
+
+            print(
+                "💾 Decisión guardada para "
+                "futuros recálculos."
+            )
+
+            break
+
+    return (
+        resultado
+        .sort_values(
+            [
+                "fecha_cita",
+                "placa_normalizada",
+                "appointment_number",
+            ],
+            kind="stable",
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
 def main() -> None:
 
     argumentos = leer_argumentos()
-
+    
+    inicializar_base()
+    
     desde, hasta = validar_fechas(
         argumentos.desde,
         argumentos.hasta,
@@ -4623,6 +5308,161 @@ def main() -> None:
         presencias=presencias,
     )
 
+    matches = resolver_revisiones_matching_terminal(
+        matches=matches,
+        citas=citas,
+        presencias=presencias,
+    )
+
+    # ========================================================
+    # DETALLE MAESTRO DE EFECTIVIDAD
+    #
+    # Esta es la fuente oficial para reportes y Streamlit.
+    # Utiliza exclusivamente:
+    #
+    # - universo operativo vigente;
+    # - matching global definitivo;
+    # - resoluciones manuales aplicadas;
+    # - documentos que respaldan la presencia.
+    # ========================================================
+
+    detalle_efectividad = construir_detalle_efectividad(
+        citas=citas,
+        matches=matches,
+        presencias=presencias,
+    )
+
+    resumen_detalle = validar_detalle_efectividad(
+        detalle=detalle_efectividad,
+        citas=citas,
+        matches=matches,
+    )
+
+
+    # ========================================================
+    scorecards = construir_scorecards_operativos(
+        detalle=detalle_efectividad,
+        anio=2026,
+        fecha_corte="2026-11-08",
+        agente_a="Rocio Miranda Ausejo",
+        agente_b="Brenda Montalvan Cornejo",
+        filtro_servicio="TODOS",
+        configuracion=CONFIG_SCORECARD_2026,
+    )
+
+    print()
+    print("=" * 88)
+    print("SCORECARD GENERAL — TODOS")
+    print("=" * 88)
+
+    print(
+        scorecards[
+            "general_mensual"
+        ].to_string()
+    )
+
+    print()
+    print(
+        scorecards[
+            "general_al_dia"
+        ].to_string()
+    )
+
+    print()
+    print("=" * 88)
+    print("SCORECARD ROCIO — TODOS")
+    print("=" * 88)
+
+    print(
+        scorecards[
+            "agente_a_mensual"
+        ].to_string()
+    )
+
+    print()
+    print("=" * 88)
+    print("SCORECARD BRENDA — TODOS")
+    print("=" * 88)
+
+    print(
+        scorecards[
+            "agente_b_mensual"
+        ].to_string()
+    )
+
+    print()
+    print("=" * 88)
+    print("SCORECARD OTROS — TODOS")
+    print("=" * 88)
+
+    print(
+        scorecards[
+            "otros_mensual"
+        ].to_string()
+    )
+
+    for filtro in [
+        "TODOS",
+        "PREVENTIVO",
+        "NO_PREVENTIVO",
+    ]:
+
+        scorecards_filtro = (
+            construir_scorecards_operativos(
+                detalle=detalle_efectividad,
+                anio=2026,
+                fecha_corte="2026-11-08",
+                agente_a="Rocio Miranda Ausejo",
+                agente_b="Brenda Montalvan Cornejo",
+                filtro_servicio=filtro,
+                configuracion=CONFIG_SCORECARD_2026,
+            )
+        )
+
+        print()
+        print("=" * 88)
+        print(
+            f"VALIDACIÓN SCORECARD — {filtro}"
+        )
+        print("=" * 88)
+
+        for nombre in [
+            "general_mensual",
+            "agente_a_mensual",
+            "agente_b_mensual",
+            "otros_mensual",
+        ]:
+
+            tabla = scorecards_filtro[
+                nombre
+            ]
+
+            print()
+            print(nombre.upper())
+
+            print(
+                tabla[
+                    [
+                        "noviembre"
+                    ]
+                ].to_string()
+            )
+
+
+
+
+
+
+
+    # ========================================================
+
+
+
+    imprimir_auditoria_detalle(
+        detalle=detalle_efectividad,
+        resumen=resumen_detalle,
+    )
+
     auditar_placa_matching(
         placa="DAQ057",
         citas=citas,
@@ -4676,9 +5516,6 @@ def main() -> None:
     # a las reglas automáticas.
     # ========================================================
 
-    resultado = resolver_ambiguedades_terminal(
-        resultado
-    )
 
     # ========================================================
     # RESULTADOS NIVEL 1

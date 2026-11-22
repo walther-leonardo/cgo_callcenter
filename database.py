@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pandas as pd
 import sqlite3
-
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from config import DATABASE_PATH
 
 
@@ -172,7 +174,6 @@ def inicializar_base() -> None:
             """
         )
 
-
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS cambios_snapshot (
@@ -265,7 +266,6 @@ def inicializar_base() -> None:
             """
         )
 
-
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS
@@ -297,8 +297,97 @@ def inicializar_base() -> None:
             """
         )
 
+        # ====================================================
+        # OVERRIDES MANUALES — MATCHING DE EFECTIVIDAD
+        # ====================================================
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS
+            efectividad_matching_overrides (
+                presencia_id TEXT PRIMARY KEY,
+
+                id_cita_elegida TEXT NOT NULL,
+                appointment_number INTEGER,
+
+                persona_creditada TEXT NOT NULL,
+
+                canal_decision TEXT NOT NULL,
+                usuario_decision TEXT NOT NULL,
+
+                motivo TEXT,
+
+                fecha_creacion TEXT NOT NULL,
+                fecha_actualizacion TEXT NOT NULL,
+
+                activo INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_efectividad_matching_override_cita
+            ON efectividad_matching_overrides (
+                id_cita_elegida
+            )
+            """
+        )
+
+        # ====================================================
+        # CASOS PENDIENTES — REVISIÓN DE EFECTIVIDAD
+        # ====================================================
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS
+            efectividad_conflictos_pendientes (
+                presencia_id TEXT PRIMARY KEY,
+
+                placa TEXT NOT NULL,
+                fecha_visita TEXT NOT NULL,
+                nivel INTEGER NOT NULL,
+
+                fecha_detectada TEXT NOT NULL,
+                fecha_actualizacion TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS
+            efectividad_conflicto_candidatas (
+                presencia_id TEXT NOT NULL,
+                id_cita TEXT NOT NULL,
+
+                appointment_number INTEGER,
+                agente TEXT,
+                fecha_cita TEXT,
+                fecha_hora_cita TEXT,
+                motivos TEXT,
+                diferencia_dias INTEGER,
+
+                PRIMARY KEY (
+                    presencia_id,
+                    id_cita
+                ),
+
+                FOREIGN KEY (
+                    presencia_id
+                )
+                REFERENCES efectividad_conflictos_pendientes (
+                    presencia_id
+                )
+                ON DELETE CASCADE
+            )
+            """
+        )
 
         conn.commit()
+
+
 
 
 def guardar_llamadas_cloudtalk(
@@ -504,3 +593,522 @@ def guardar_llamadas_cloudtalk(
     )
 
 
+# ============================================================
+# OVERRIDES MANUALES — MATCHING DE EFECTIVIDAD
+# ============================================================
+
+ZONA_LIMA = ZoneInfo(
+    "America/Lima"
+)
+
+
+def obtener_override_matching(
+    presencia_id: str,
+) -> dict | None:
+    """
+    Recupera la decisión manual activa asociada
+    a una presencia.
+
+    Devuelve None cuando no existe decisión activa.
+    """
+
+    with get_connection() as conn:
+
+        conn.row_factory = sqlite3.Row
+
+        fila = conn.execute(
+            """
+            SELECT
+                presencia_id,
+                id_cita_elegida,
+                appointment_number,
+                persona_creditada,
+                canal_decision,
+                usuario_decision,
+                motivo,
+                fecha_creacion,
+                fecha_actualizacion,
+                activo
+
+            FROM efectividad_matching_overrides
+
+            WHERE presencia_id = ?
+              AND activo = 1
+            """,
+            (
+                presencia_id,
+            ),
+        ).fetchone()
+
+    if fila is None:
+        return None
+
+    return dict(
+        fila
+    )
+
+
+def guardar_override_matching(
+    presencia_id: str,
+    id_cita_elegida: str,
+    appointment_number,
+    persona_creditada: str,
+    canal_decision: str,
+    usuario_decision: str,
+    motivo: str | None = None,
+) -> None:
+    """
+    Guarda o actualiza la decisión manual correspondiente
+    a una presencia ambigua.
+
+    Solo puede existir una decisión activa por presencia.
+    """
+
+    ahora = datetime.now(
+        ZONA_LIMA
+    ).isoformat(
+        timespec="seconds"
+    )
+
+    with get_connection() as conn:
+
+        conn.execute(
+            """
+            INSERT INTO efectividad_matching_overrides (
+                presencia_id,
+                id_cita_elegida,
+                appointment_number,
+                persona_creditada,
+                canal_decision,
+                usuario_decision,
+                motivo,
+                fecha_creacion,
+                fecha_actualizacion,
+                activo
+            )
+
+            VALUES (
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                1
+            )
+
+            ON CONFLICT (
+                presencia_id
+            )
+
+            DO UPDATE SET
+                id_cita_elegida =
+                    excluded.id_cita_elegida,
+
+                appointment_number =
+                    excluded.appointment_number,
+
+                persona_creditada =
+                    excluded.persona_creditada,
+
+                canal_decision =
+                    excluded.canal_decision,
+
+                usuario_decision =
+                    excluded.usuario_decision,
+
+                motivo =
+                    excluded.motivo,
+
+                fecha_actualizacion =
+                    excluded.fecha_actualizacion,
+
+                activo = 1
+            """,
+            (
+                presencia_id,
+                str(
+                    id_cita_elegida
+                ),
+                (
+                    int(
+                        appointment_number
+                    )
+                    if appointment_number
+                    is not None
+                    else None
+                ),
+                persona_creditada,
+                canal_decision,
+                usuario_decision,
+                motivo,
+                ahora,
+                ahora,
+            ),
+        )
+
+        conn.commit()
+
+
+def desactivar_override_matching(
+    presencia_id: str,
+) -> None:
+    """
+    Desactiva una decisión manual sin borrar
+    su registro histórico.
+    """
+
+    ahora = datetime.now(
+        ZONA_LIMA
+    ).isoformat(
+        timespec="seconds"
+    )
+
+    with get_connection() as conn:
+
+        conn.execute(
+            """
+            UPDATE efectividad_matching_overrides
+
+            SET
+                activo = 0,
+                fecha_actualizacion = ?
+
+            WHERE presencia_id = ?
+            """,
+            (
+                ahora,
+                presencia_id,
+            ),
+        )
+
+        conn.commit()
+
+
+def listar_overrides_matching(
+    solo_activos: bool = True,
+) -> list[dict]:
+    """
+    Devuelve las decisiones manuales almacenadas.
+
+    Será útil posteriormente para una pantalla de
+    administración en Streamlit.
+    """
+
+    consulta = """
+        SELECT
+            presencia_id,
+            id_cita_elegida,
+            appointment_number,
+            persona_creditada,
+            canal_decision,
+            usuario_decision,
+            motivo,
+            fecha_creacion,
+            fecha_actualizacion,
+            activo
+
+        FROM efectividad_matching_overrides
+    """
+
+    parametros = ()
+
+    if solo_activos:
+
+        consulta += """
+            WHERE activo = 1
+        """
+
+    consulta += """
+        ORDER BY fecha_actualizacion DESC
+    """
+
+    with get_connection() as conn:
+
+        conn.row_factory = sqlite3.Row
+
+        filas = conn.execute(
+            consulta,
+            parametros,
+        ).fetchall()
+
+    return [
+        dict(
+            fila
+        )
+        for fila in filas
+    ]
+
+
+def limpiar_conflictos_revision_matching() -> None:
+    """
+    Vacía la cola temporal de conflictos.
+
+    Se ejecuta antes de reconstruir los conflictos actuales.
+    Los overrides permanentes NO se eliminan.
+    """
+
+    with get_connection() as conn:
+
+        conn.execute(
+            """
+            DELETE FROM efectividad_conflicto_candidatas
+            """
+        )
+
+        conn.execute(
+            """
+            DELETE FROM efectividad_conflictos_pendientes
+            """
+        )
+
+        conn.commit()
+
+
+def guardar_conflicto_revision_matching(
+    presencia_id: str,
+    placa: str,
+    fecha_visita,
+    nivel: int,
+    candidatas: pd.DataFrame,
+) -> None:
+    """
+    Guarda un conflicto real y las citas candidatas
+    que pueden recibir la presencia.
+
+    Esta información es la que posteriormente consume
+    Streamlit.
+    """
+
+    ahora = datetime.now(
+        ZONA_LIMA
+    ).isoformat(
+        timespec="seconds"
+    )
+
+    with get_connection() as conn:
+
+        conn.execute(
+            """
+            INSERT INTO efectividad_conflictos_pendientes (
+                presencia_id,
+                placa,
+                fecha_visita,
+                nivel,
+                fecha_detectada,
+                fecha_actualizacion
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+
+            ON CONFLICT (
+                presencia_id
+            )
+
+            DO UPDATE SET
+                placa =
+                    excluded.placa,
+
+                fecha_visita =
+                    excluded.fecha_visita,
+
+                nivel =
+                    excluded.nivel,
+
+                fecha_actualizacion =
+                    excluded.fecha_actualizacion
+            """,
+            (
+                presencia_id,
+                placa,
+                str(
+                    fecha_visita
+                ),
+                int(
+                    nivel
+                ),
+                ahora,
+                ahora,
+            ),
+        )
+
+        conn.execute(
+            """
+            DELETE FROM efectividad_conflicto_candidatas
+            WHERE presencia_id = ?
+            """,
+            (
+                presencia_id,
+            ),
+        )
+
+        registros = []
+
+        for fila in candidatas.itertuples(
+            index=False
+        ):
+
+            fecha_hora = getattr(
+                fila,
+                "fecha_hora_cita_lima",
+                None,
+            )
+
+            if pd.notna(
+                fecha_hora
+            ):
+                fecha_hora = str(
+                    fecha_hora
+                )
+            else:
+                fecha_hora = None
+
+            registros.append(
+                (
+                    presencia_id,
+                    str(
+                        fila.id_cita
+                    ),
+                    (
+                        int(
+                            fila.appointment_number
+                        )
+                        if pd.notna(
+                            fila.appointment_number
+                        )
+                        else None
+                    ),
+                    str(
+                        fila.agente
+                    ),
+                    str(
+                        fila.fecha_cita
+                    ),
+                    fecha_hora,
+                    str(
+                        fila.motivos
+                    ),
+                    int(
+                        fila.diferencia_dias
+                    ),
+                )
+            )
+
+        conn.executemany(
+            """
+            INSERT INTO efectividad_conflicto_candidatas (
+                presencia_id,
+                id_cita,
+                appointment_number,
+                agente,
+                fecha_cita,
+                fecha_hora_cita,
+                motivos,
+                diferencia_dias
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            registros,
+        )
+
+        conn.commit()
+
+
+def cerrar_conflicto_revision_matching(
+    presencia_id: str,
+) -> None:
+    """
+    Retira un conflicto de la cola una vez resuelto.
+
+    El override permanente permanece guardado.
+    """
+
+    with get_connection() as conn:
+
+        conn.execute(
+            """
+            DELETE FROM efectividad_conflicto_candidatas
+            WHERE presencia_id = ?
+            """,
+            (
+                presencia_id,
+            ),
+        )
+
+        conn.execute(
+            """
+            DELETE FROM efectividad_conflictos_pendientes
+            WHERE presencia_id = ?
+            """,
+            (
+                presencia_id,
+            ),
+        )
+
+        conn.commit()
+
+
+def listar_conflictos_revision_matching() -> pd.DataFrame:
+    """
+    Devuelve los conflictos actualmente pendientes
+    para Streamlit.
+    """
+
+    with get_connection() as conn:
+
+        return pd.read_sql_query(
+            """
+            SELECT
+                presencia_id,
+                placa,
+                fecha_visita,
+                nivel,
+                fecha_detectada,
+                fecha_actualizacion
+
+            FROM efectividad_conflictos_pendientes
+
+            ORDER BY
+                fecha_visita,
+                placa
+            """,
+            conn,
+        )
+
+
+def listar_candidatas_conflicto_matching(
+    presencia_id: str,
+) -> pd.DataFrame:
+    """
+    Devuelve las citas candidatas de un conflicto.
+    """
+
+    with get_connection() as conn:
+
+        return pd.read_sql_query(
+            """
+            SELECT
+                presencia_id,
+                id_cita,
+                appointment_number,
+                agente,
+                fecha_cita,
+                fecha_hora_cita,
+                motivos,
+                diferencia_dias
+
+            FROM efectividad_conflicto_candidatas
+
+            WHERE presencia_id = ?
+
+            ORDER BY
+                fecha_hora_cita,
+                appointment_number
+            """,
+            conn,
+            params=[
+                presencia_id,
+            ],
+        )
