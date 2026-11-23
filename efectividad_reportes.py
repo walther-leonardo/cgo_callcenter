@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import pandas as pd
 from clasificaciones import (
     clasificar_servicio,
@@ -374,22 +375,28 @@ def _clasificar_grupo_servicio(
     motivo,
 ) -> str:
     """
-    Agrupa los servicios para el filtro del scorecard usando
-    la clasificación oficial del proyecto.
+    Agrupación comercial utilizada por efectividad.
 
     PREVENTIVO:
-        únicamente cuando clasificar_servicio() determina
-        tipo_servicio = Preventivo.
+    - Preventivo
+    - 01K
 
     NO_PREVENTIVO:
-        cualquier otro servicio.
+    - Correctivo
+    - PYP
+    - Diagnóstico
+    - Garantía
+    - Indeterminado
     """
 
     _, tipo_servicio = clasificar_servicio(
         motivo
     )
 
-    if tipo_servicio == "Preventivo":
+    if tipo_servicio in {
+        "Preventivo",
+        "01K",
+    }:
         return "PREVENTIVO"
 
     return "NO_PREVENTIVO"
@@ -1163,13 +1170,15 @@ def construir_scorecard_diario(
     mes: int,
     grupo_meta: str,
     configuracion_metas: dict,
+    fecha_corte,
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
     feriados: set | list | tuple | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Construye el scorecard diario del mes seleccionado.
+    Construye el scorecard diario del mes.
 
     Filas:
     - Meta
@@ -1178,38 +1187,32 @@ def construir_scorecard_diario(
     - % efectividad
     - % cumplimiento de meta
 
-    Domingos:
-        columna completamente vacía.
-
-    Feriados:
-        Meta vacía / cero operativo.
-        Los resultados reales se conservan si existen.
+    Reglas:
+    - domingo: columna completamente vacía;
+    - feriado: sin meta, pero conserva actividad real;
+    - días futuros: conserva meta, pero los resultados
+      permanecen vacíos.
     """
 
+    fecha_corte = pd.Timestamp(
+        fecha_corte
+    ).date()
+
     meta_mensual = obtener_meta_mensual(
-        configuracion_metas=
-            configuracion_metas,
-        grupo=
-            grupo_meta,
-        filtro_servicio=
-            filtro_servicio,
-        mes=
-            mes,
+        configuracion_metas=configuracion_metas,
+        grupo=grupo_meta,
+        filtro_servicio=filtro_servicio,
+        mes=mes,
     )
 
     if meta_mensual is None:
-
         return pd.DataFrame()
 
-    distribucion = (
-        construir_distribucion_meta_diaria(
-            anio=anio,
-            mes=mes,
-            meta_mensual=
-                meta_mensual,
-            feriados=
-                feriados,
-        )
+    distribucion = construir_distribucion_meta_diaria(
+        anio=anio,
+        mes=mes,
+        meta_mensual=meta_mensual,
+        feriados=feriados,
     )
 
     base = filtrar_detalle_scorecard(
@@ -1217,14 +1220,11 @@ def construir_scorecard_diario(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
+        tipos_servicio=tipos_servicio,
     ).copy()
 
-    base[
-        "_fecha_cita"
-    ] = pd.to_datetime(
-        base[
-            "fecha_cita"
-        ],
+    base["_fecha_cita"] = pd.to_datetime(
+        base["fecha_cita"],
         errors="coerce",
     ).dt.date
 
@@ -1250,11 +1250,12 @@ def construir_scorecard_diario(
         index=False
     ):
 
-        etiqueta = (
-            fila_dia.etiqueta
-        )
-
+        etiqueta = fila_dia.etiqueta
         fecha = fila_dia.fecha
+
+        # ----------------------------------------------------
+        # DOMINGO: columna completamente vacía
+        # ----------------------------------------------------
 
         if fila_dia.es_domingo:
 
@@ -1265,23 +1266,13 @@ def construir_scorecard_diario(
 
             continue
 
-        detalle_dia = base.loc[
-            base[
-                "_fecha_cita"
-            ].eq(
-                fecha
-            )
-        ].copy()
-
-        indicadores = (
-            calcular_indicadores_periodo(
-                detalle_dia
-            )
-        )
-
         meta_dia = int(
             fila_dia.meta_dia
         )
+
+        # ----------------------------------------------------
+        # META
+        # ----------------------------------------------------
 
         resultado.loc[
             "Meta",
@@ -1290,6 +1281,24 @@ def construir_scorecard_diario(
             pd.NA
             if fila_dia.es_feriado
             else meta_dia
+        )
+
+        # ----------------------------------------------------
+        # DÍA FUTURO:
+        # mostramos planificación, no resultados ficticios.
+        # ----------------------------------------------------
+
+        if fecha > fecha_corte:
+            continue
+
+        detalle_dia = base.loc[
+            base["_fecha_cita"].eq(
+                fecha
+            )
+        ].copy()
+
+        indicadores = calcular_indicadores_periodo(
+            detalle_dia
         )
 
         resultado.loc[
@@ -1313,11 +1322,10 @@ def construir_scorecard_diario(
             "efectividad_pct"
         ]
 
-        if fila_dia.es_feriado:
-
-            cumplimiento = pd.NA
-
-        elif meta_dia == 0:
+        if (
+            fila_dia.es_feriado
+            or meta_dia == 0
+        ):
 
             cumplimiento = pd.NA
 
@@ -1477,6 +1485,7 @@ def calcular_comision_agente(
     grupo_meta: str,
     configuracion_metas: dict,
     configuracion_incentivos: dict,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> dict:
     """
     Calcula la comisión oficial del agente.
@@ -1537,6 +1546,7 @@ def calcular_comision_agente(
         detalle=detalle,
         filtro_servicio="TODOS",
         persona=agente,
+        tipos_servicio=tipos_servicio,
     ).copy()
 
     base[
@@ -1578,6 +1588,49 @@ def calcular_comision_agente(
         if meta
         else 0.0
     )
+
+    umbrales = [
+        0.50,
+        0.60,
+        0.70,
+        0.80,
+        0.90,
+        0.95,
+        1.00,
+        1.50,
+    ]
+
+
+    siguiente_umbral = next(
+        (
+            umbral
+            for umbral in umbrales
+            if cumplimiento
+            <
+            umbral
+        ),
+        None,
+    )
+
+
+    if siguiente_umbral is None:
+
+        faltantes_siguiente_tramo = 0
+
+    else:
+
+        resultado_necesario = math.ceil(
+            meta
+            *
+            siguiente_umbral
+        )
+
+        faltantes_siguiente_tramo = max(
+            0,
+            resultado_necesario
+            -
+            resultado,
+        )
 
     # ========================================================
     # ESCALA DE INCENTIVO
@@ -1626,6 +1679,8 @@ def calcular_comision_agente(
         factor
     )
 
+
+
     return {
         "meta":
             int(
@@ -1661,6 +1716,22 @@ def calcular_comision_agente(
                 comision,
                 2,
             ),
+
+        "siguiente_umbral_pct":
+            (
+                round(
+                    siguiente_umbral
+                    *
+                    100,
+                    1,
+                )
+                if siguiente_umbral
+                is not None
+                else None
+            ),
+
+        "faltantes_siguiente_tramo":
+            faltantes_siguiente_tramo,
     }
 
 # ============================================================
@@ -1676,20 +1747,16 @@ def filtrar_detalle_scorecard(
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Aplica los filtros comunes del scorecard.
+    Aplica las dos capas de filtros.
 
-    filtro_servicio:
-        TODOS
-        PREVENTIVO
-        NO_PREVENTIVO
+    Capa 1:
+        TODOS / PREVENTIVO / NO_PREVENTIVO
 
-    persona:
-        filtra una única persona acreditada.
-
-    excluir_personas:
-        permite construir el grupo Otros agentes.
+    Capa 2:
+        tipos concretos de servicio que deben contabilizarse.
     """
 
     filtro_servicio = (
@@ -1700,16 +1767,36 @@ def filtrar_detalle_scorecard(
         .upper()
     )
 
-    if (
-        filtro_servicio
-        not in FILTROS_SERVICIO_VALIDOS
-    ):
+    if filtro_servicio not in {
+        "TODOS",
+        "PREVENTIVO",
+        "NO_PREVENTIVO",
+    }:
+
         raise ValueError(
-            "Filtro de servicio no válido: "
-            f"{filtro_servicio}"
+            f"Filtro no válido: {filtro_servicio}"
         )
 
     resultado = detalle.copy()
+
+    # ========================================================
+    # CLASIFICACIÓN DETALLADA
+    # ========================================================
+
+    resultado[
+        "_tipo_servicio"
+    ] = resultado[
+        "motivos"
+    ].apply(
+        lambda motivo:
+            clasificar_servicio(
+                motivo
+            )[1]
+    )
+
+    # ========================================================
+    # CAPA 1 — GRUPO
+    # ========================================================
 
     if filtro_servicio != "TODOS":
 
@@ -1720,6 +1807,28 @@ def filtrar_detalle_scorecard(
                 filtro_servicio
             )
         ].copy()
+
+    # ========================================================
+    # CAPA 2 — TIPO CONCRETO
+    # ========================================================
+
+    if tipos_servicio is not None:
+
+        tipos_servicio = set(
+            tipos_servicio
+        )
+
+        resultado = resultado.loc[
+            resultado[
+                "_tipo_servicio"
+            ].isin(
+                tipos_servicio
+            )
+        ].copy()
+
+    # ========================================================
+    # PERSONA
+    # ========================================================
 
     if persona is not None:
 
@@ -1902,6 +2011,7 @@ def construir_scorecard_mensual(
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> pd.DataFrame:
     """
     Construye la matriz mensual enero-diciembre.
@@ -1928,6 +2038,7 @@ def construir_scorecard_mensual(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
+        tipos_servicio=tipos_servicio,
     ).copy()
 
     base["_fecha_cita"] = pd.to_datetime(
@@ -2069,6 +2180,7 @@ def construir_avance_al_dia(
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
     feriados: set | list | tuple | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> dict:
     """
     Calcula el avance acumulado contra la meta diaria
@@ -2101,6 +2213,7 @@ def construir_avance_al_dia(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
+        tipos_servicio=tipos_servicio,
     ).copy()
 
     base[
@@ -2273,6 +2386,7 @@ def construir_evolucion_acumulada(
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
     feriados: set | list | tuple | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> pd.DataFrame:
     """
     Construye la evolución acumulada real del mes.
@@ -2321,6 +2435,7 @@ def construir_evolucion_acumulada(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
+        tipos_servicio=tipos_servicio,
     ).copy()
 
     base[
@@ -2418,6 +2533,7 @@ def construir_bloque_scorecard(
     filtro_servicio: str,
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> dict:
     """
     Construye todo lo necesario para una sección:
@@ -2477,6 +2593,7 @@ def construir_scorecards_operativos(
     agente_b: str,
     filtro_servicio: str = "TODOS",
     configuracion_metas: dict | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
 ) -> dict:
     """
     Construye los cuatro bloques del reporte:

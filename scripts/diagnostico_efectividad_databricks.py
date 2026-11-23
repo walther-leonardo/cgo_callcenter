@@ -5166,6 +5166,95 @@ def resolver_revisiones_matching_terminal(
         )
     )
 
+def auditar_unicidad_presencias(
+    presencias: pd.DataFrame,
+    matches: pd.DataFrame,
+) -> None:
+    """
+    Garantiza las reglas estructurales del motor:
+
+    - una placa + fecha produce una sola presencia;
+    - presencia_id es único;
+    - una presencia acredita máximo una cita;
+    - una cita consume máximo una presencia.
+    """
+
+    errores = []
+
+    duplicados_clave = int(
+        presencias.duplicated(
+            subset=[
+                "placa_normalizada",
+                "fecha_visita",
+            ]
+        ).sum()
+    )
+
+    duplicados_id = int(
+        presencias[
+            "presencia_id"
+        ].duplicated().sum()
+    )
+
+    presencia_reutilizada = int(
+        matches[
+            "presencia_id"
+        ]
+        .dropna()
+        .duplicated()
+        .sum()
+    )
+
+    cita_reutilizada = int(
+        matches[
+            "id_cita"
+        ]
+        .dropna()
+        .duplicated()
+        .sum()
+    )
+
+    if duplicados_clave:
+        errores.append(
+            f"{duplicados_clave} presencia(s) duplicada(s) "
+            "por placa + fecha."
+        )
+
+    if duplicados_id:
+        errores.append(
+            f"{duplicados_id} presencia_id duplicados."
+        )
+
+    if presencia_reutilizada:
+        errores.append(
+            f"{presencia_reutilizada} presencia(s) "
+            "acreditando más de una cita."
+        )
+
+    if cita_reutilizada:
+        errores.append(
+            f"{cita_reutilizada} cita(s) consumiendo "
+            "más de una presencia."
+        )
+
+    if errores:
+
+        raise ValueError(
+            "AUDITORÍA DE PRESENCIAS FALLÓ:\n- "
+            +
+            "\n- ".join(
+                errores
+            )
+        )
+
+    print()
+    print("=" * 88)
+    print("AUDITORÍA — UNICIDAD DE PRESENCIAS")
+    print("=" * 88)
+    print("✅ Una presencia por placa + fecha.")
+    print("✅ presencia_id único.")
+    print("✅ Una presencia acredita máximo una cita.")
+    print("✅ Una cita consume máximo una presencia.")
 
 def main() -> None:
 
@@ -5349,6 +5438,11 @@ def main() -> None:
         presencias=presencias,
     )
 
+    auditar_unicidad_presencias(
+        presencias=presencias,
+        matches=matches,
+    )
+
     # ========================================================
     # DETALLE MAESTRO DE EFECTIVIDAD
     #
@@ -5387,120 +5481,7 @@ def main() -> None:
 
 
     # ========================================================
-    scorecards = construir_scorecards_operativos(
-        detalle=detalle_efectividad,
-        anio=2026,
-        fecha_corte="2026-11-08",
-        agente_a="Rocio Miranda Ausejo",
-        agente_b="Brenda Montalvan Cornejo",
-        filtro_servicio="TODOS",
-        configuracion=CONFIG_SCORECARD_2026,
-    )
-
-    print()
-    print("=" * 88)
-    print("SCORECARD GENERAL — TODOS")
-    print("=" * 88)
-
-    print(
-        scorecards[
-            "general_mensual"
-        ].to_string()
-    )
-
-    print()
-    print(
-        scorecards[
-            "general_al_dia"
-        ].to_string()
-    )
-
-    print()
-    print("=" * 88)
-    print("SCORECARD ROCIO — TODOS")
-    print("=" * 88)
-
-    print(
-        scorecards[
-            "agente_a_mensual"
-        ].to_string()
-    )
-
-    print()
-    print("=" * 88)
-    print("SCORECARD BRENDA — TODOS")
-    print("=" * 88)
-
-    print(
-        scorecards[
-            "agente_b_mensual"
-        ].to_string()
-    )
-
-    print()
-    print("=" * 88)
-    print("SCORECARD OTROS — TODOS")
-    print("=" * 88)
-
-    print(
-        scorecards[
-            "otros_mensual"
-        ].to_string()
-    )
-
-    for filtro in [
-        "TODOS",
-        "PREVENTIVO",
-        "NO_PREVENTIVO",
-    ]:
-
-        scorecards_filtro = (
-            construir_scorecards_operativos(
-                detalle=detalle_efectividad,
-                anio=2026,
-                fecha_corte="2026-11-08",
-                agente_a="Rocio Miranda Ausejo",
-                agente_b="Brenda Montalvan Cornejo",
-                filtro_servicio=filtro,
-                configuracion=CONFIG_SCORECARD_2026,
-            )
-        )
-
-        print()
-        print("=" * 88)
-        print(
-            f"VALIDACIÓN SCORECARD — {filtro}"
-        )
-        print("=" * 88)
-
-        for nombre in [
-            "general_mensual",
-            "agente_a_mensual",
-            "agente_b_mensual",
-            "otros_mensual",
-        ]:
-
-            tabla = scorecards_filtro[
-                nombre
-            ]
-
-            print()
-            print(nombre.upper())
-
-            print(
-                tabla[
-                    [
-                        "noviembre"
-                    ]
-                ].to_string()
-            )
-
-
-
-
-
-
-
+    
     # ========================================================
 
 
@@ -5624,4 +5605,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
