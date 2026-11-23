@@ -890,12 +890,460 @@ MESES = {
     12: "diciembre",
 }
 
+DIAS_SEMANA_CORTO = {
+    0: "lun",
+    1: "mar",
+    2: "mié",
+    3: "jue",
+    4: "vie",
+    5: "sáb",
+    6: "dom",
+}
+
+
+PESO_LUNES_VIERNES = 1.0
+PESO_SABADO = 0.5
+PESO_DOMINGO = 0.0
+
 
 FILTROS_SERVICIO_VALIDOS = {
     "TODOS",
     "PREVENTIVO",
     "NO_PREVENTIVO",
 }
+
+
+def construir_distribucion_meta_diaria(
+    anio: int,
+    mes: int,
+    meta_mensual: int | float,
+    feriados: set | list | tuple | None = None,
+) -> pd.DataFrame:
+    """
+    Distribuye una meta mensual entre los días del mes.
+
+    Pesos:
+    - lunes-viernes: 1.0
+    - sábado: 0.5
+    - domingo: 0
+    - feriado: 0
+
+    La suma final de meta_dia coincide exactamente con
+    meta_mensual.
+
+    Los feriados deben recibirse como fechas o valores
+    convertibles a fecha.
+    """
+
+    if meta_mensual is None:
+
+        return pd.DataFrame()
+
+    meta_mensual = int(
+        round(
+            float(
+                meta_mensual
+            )
+        )
+    )
+
+    feriados = feriados or []
+
+    feriados_normalizados = {
+        pd.Timestamp(
+            fecha
+        ).date()
+        for fecha in feriados
+    }
+
+    dias_mes = calendar.monthrange(
+        anio,
+        mes,
+    )[1]
+
+    registros = []
+
+    for dia in range(
+        1,
+        dias_mes + 1,
+    ):
+
+        fecha = pd.Timestamp(
+            year=anio,
+            month=mes,
+            day=dia,
+        )
+
+        fecha_date = fecha.date()
+
+        weekday = fecha.weekday()
+
+        es_domingo = (
+            weekday == 6
+        )
+
+        es_sabado = (
+            weekday == 5
+        )
+
+        es_feriado = (
+            fecha_date
+            in feriados_normalizados
+        )
+
+        if es_domingo or es_feriado:
+
+            peso = 0.0
+
+        elif es_sabado:
+
+            peso = (
+                PESO_SABADO
+            )
+
+        else:
+
+            peso = (
+                PESO_LUNES_VIERNES
+            )
+
+        registros.append(
+            {
+                "fecha":
+                    fecha_date,
+
+                "dia":
+                    dia,
+
+                "dia_semana":
+                    DIAS_SEMANA_CORTO[
+                        weekday
+                    ],
+
+                "etiqueta":
+                    (
+                        f"{dia:02d}-"
+                        f"{DIAS_SEMANA_CORTO[weekday]}"
+                    ),
+
+                "es_domingo":
+                    es_domingo,
+
+                "es_feriado":
+                    es_feriado,
+
+                "peso":
+                    peso,
+            }
+        )
+
+    distribucion = pd.DataFrame(
+        registros
+    )
+
+    peso_total = distribucion[
+        "peso"
+    ].sum()
+
+    if peso_total <= 0:
+
+        raise ValueError(
+            "El mes no contiene días disponibles "
+            "para distribuir la meta."
+        )
+
+    distribucion[
+        "_cuota_exacta"
+    ] = (
+        meta_mensual
+        *
+        distribucion[
+            "peso"
+        ]
+        /
+        peso_total
+    )
+
+    distribucion[
+        "meta_dia"
+    ] = (
+        distribucion[
+            "_cuota_exacta"
+        ]
+        .fillna(0)
+        .astype(int)
+    )
+
+    # ========================================================
+    # AJUSTE DE REDONDEO
+    #
+    # Garantiza:
+    #
+    # sum(meta_dia) == meta_mensual
+    # ========================================================
+
+    faltante = (
+        meta_mensual
+        -
+        int(
+            distribucion[
+                "meta_dia"
+            ].sum()
+        )
+    )
+
+    if faltante > 0:
+
+        distribucion[
+            "_residuo"
+        ] = (
+            distribucion[
+                "_cuota_exacta"
+            ]
+            -
+            distribucion[
+                "meta_dia"
+            ]
+        )
+
+        candidatos = (
+            distribucion.loc[
+                distribucion[
+                    "peso"
+                ].gt(0)
+            ]
+            .sort_values(
+                [
+                    "_residuo",
+                    "fecha",
+                ],
+                ascending=[
+                    False,
+                    True,
+                ],
+                kind="stable",
+            )
+            .index
+            .tolist()
+        )
+
+        for indice in candidatos[
+            :faltante
+        ]:
+
+            distribucion.loc[
+                indice,
+                "meta_dia",
+            ] += 1
+
+    distribucion[
+        "meta_acumulada"
+    ] = distribucion[
+        "meta_dia"
+    ].cumsum()
+
+    return distribucion[
+        [
+            "fecha",
+            "dia",
+            "dia_semana",
+            "etiqueta",
+            "es_domingo",
+            "es_feriado",
+            "peso",
+            "meta_dia",
+            "meta_acumulada",
+        ]
+    ]
+
+
+def construir_scorecard_diario(
+    detalle: pd.DataFrame,
+    anio: int,
+    mes: int,
+    grupo_meta: str,
+    configuracion_metas: dict,
+    filtro_servicio: str = "TODOS",
+    persona: str | None = None,
+    excluir_personas: list[str] | None = None,
+    feriados: set | list | tuple | None = None,
+) -> pd.DataFrame:
+    """
+    Construye el scorecard diario del mes seleccionado.
+
+    Filas:
+    - Meta
+    - cita agendada
+    - cita efectiva
+    - % efectividad
+    - % cumplimiento de meta
+
+    Domingos:
+        columna completamente vacía.
+
+    Feriados:
+        Meta vacía / cero operativo.
+        Los resultados reales se conservan si existen.
+    """
+
+    meta_mensual = obtener_meta_mensual(
+        configuracion_metas=
+            configuracion_metas,
+        grupo=
+            grupo_meta,
+        filtro_servicio=
+            filtro_servicio,
+        mes=
+            mes,
+    )
+
+    if meta_mensual is None:
+
+        return pd.DataFrame()
+
+    distribucion = (
+        construir_distribucion_meta_diaria(
+            anio=anio,
+            mes=mes,
+            meta_mensual=
+                meta_mensual,
+            feriados=
+                feriados,
+        )
+    )
+
+    base = filtrar_detalle_scorecard(
+        detalle=detalle,
+        filtro_servicio=filtro_servicio,
+        persona=persona,
+        excluir_personas=excluir_personas,
+    ).copy()
+
+    base[
+        "_fecha_cita"
+    ] = pd.to_datetime(
+        base[
+            "fecha_cita"
+        ],
+        errors="coerce",
+    ).dt.date
+
+    filas = [
+        "Meta",
+        "cita agendada",
+        "cita efectiva",
+        "% efectividad",
+        "% cumplimiento de meta",
+    ]
+
+    columnas = distribucion[
+        "etiqueta"
+    ].tolist()
+
+    resultado = pd.DataFrame(
+        index=filas,
+        columns=columnas,
+        dtype="object",
+    )
+
+    for fila_dia in distribucion.itertuples(
+        index=False
+    ):
+
+        etiqueta = (
+            fila_dia.etiqueta
+        )
+
+        fecha = fila_dia.fecha
+
+        if fila_dia.es_domingo:
+
+            resultado.loc[
+                :,
+                etiqueta,
+            ] = pd.NA
+
+            continue
+
+        detalle_dia = base.loc[
+            base[
+                "_fecha_cita"
+            ].eq(
+                fecha
+            )
+        ].copy()
+
+        indicadores = (
+            calcular_indicadores_periodo(
+                detalle_dia
+            )
+        )
+
+        meta_dia = int(
+            fila_dia.meta_dia
+        )
+
+        resultado.loc[
+            "Meta",
+            etiqueta,
+        ] = (
+            pd.NA
+            if fila_dia.es_feriado
+            else meta_dia
+        )
+
+        resultado.loc[
+            "cita agendada",
+            etiqueta,
+        ] = indicadores[
+            "cita_agendada"
+        ]
+
+        resultado.loc[
+            "cita efectiva",
+            etiqueta,
+        ] = indicadores[
+            "cita_efectiva"
+        ]
+
+        resultado.loc[
+            "% efectividad",
+            etiqueta,
+        ] = indicadores[
+            "efectividad_pct"
+        ]
+
+        if fila_dia.es_feriado:
+
+            cumplimiento = pd.NA
+
+        elif meta_dia == 0:
+
+            cumplimiento = pd.NA
+
+        else:
+
+            cumplimiento = round(
+                indicadores[
+                    "cita_efectiva"
+                ]
+                /
+                meta_dia
+                *
+                100,
+                1,
+            )
+
+        resultado.loc[
+            "% cumplimiento de meta",
+            etiqueta,
+        ] = cumplimiento
+
+    resultado.index.name = (
+        "Nivel diario"
+    )
+
+    return resultado
 
 
 # ============================================================
@@ -1009,6 +1457,211 @@ CONFIG_METAS_2026 = {
     },
 }
 
+CONFIG_INCENTIVOS_2026 = {
+    "ROCIO": {
+        11: 1000,
+        12: 1000,
+    },
+
+    "BRENDA": {
+        11: 1000,
+        12: 1000,
+    },
+}
+
+def calcular_comision_agente(
+    detalle: pd.DataFrame,
+    anio: int,
+    mes: int,
+    agente: str,
+    grupo_meta: str,
+    configuracion_metas: dict,
+    configuracion_incentivos: dict,
+) -> dict:
+    """
+    Calcula la comisión oficial del agente.
+
+    IMPORTANTE:
+    La comisión SIEMPRE usa TODOS los servicios,
+    independientemente del filtro visual del dashboard.
+    """
+
+    meta = obtener_meta_mensual(
+        configuracion_metas=
+            configuracion_metas,
+        grupo=
+            grupo_meta,
+        filtro_servicio=
+            "TODOS",
+        mes=
+            mes,
+    )
+
+    incentivo_base = (
+        configuracion_incentivos
+        .get(
+            grupo_meta,
+            {},
+        )
+        .get(
+            mes
+        )
+    )
+
+    if (
+        meta is None
+        or incentivo_base is None
+    ):
+
+        return {
+            "meta":
+                meta,
+
+            "resultado":
+                None,
+
+            "cumplimiento_pct":
+                None,
+
+            "factor_incentivo_pct":
+                None,
+
+            "incentivo_base":
+                incentivo_base,
+
+            "comision":
+                None,
+        }
+
+    base = filtrar_detalle_scorecard(
+        detalle=detalle,
+        filtro_servicio="TODOS",
+        persona=agente,
+    ).copy()
+
+    base[
+        "_fecha_cita"
+    ] = pd.to_datetime(
+        base[
+            "fecha_cita"
+        ],
+        errors="coerce",
+    )
+
+    base = base.loc[
+        base[
+            "_fecha_cita"
+        ].dt.year.eq(
+            anio
+        )
+        &
+        base[
+            "_fecha_cita"
+        ].dt.month.eq(
+            mes
+        )
+    ].copy()
+
+    resultado = int(
+        base.loc[
+            base[
+                "es_efectiva"
+            ],
+            "id_cita",
+        ].nunique()
+    )
+
+    cumplimiento = (
+        resultado
+        /
+        meta
+        if meta
+        else 0.0
+    )
+
+    # ========================================================
+    # ESCALA DE INCENTIVO
+    # ========================================================
+
+    if cumplimiento < 0.50:
+
+        factor = 0.00
+
+    elif cumplimiento < 0.60:
+
+        factor = 0.50
+
+    elif cumplimiento < 0.70:
+
+        factor = 0.60
+
+    elif cumplimiento < 0.80:
+
+        factor = 0.70
+
+    elif cumplimiento < 0.90:
+
+        factor = 0.80
+
+    elif cumplimiento < 0.95:
+
+        factor = 0.90
+
+    elif cumplimiento <= 1.00:
+
+        factor = 1.00
+
+    else:
+
+        factor = min(
+            cumplimiento,
+            1.50,
+        )
+
+    comision = (
+        float(
+            incentivo_base
+        )
+        *
+        factor
+    )
+
+    return {
+        "meta":
+            int(
+                meta
+            ),
+
+        "resultado":
+            resultado,
+
+        "cumplimiento_pct":
+            round(
+                cumplimiento
+                *
+                100,
+                1,
+            ),
+
+        "factor_incentivo_pct":
+            round(
+                factor
+                *
+                100,
+                1,
+            ),
+
+        "incentivo_base":
+            float(
+                incentivo_base
+            ),
+
+        "comision":
+            round(
+                comision,
+                2,
+            ),
+    }
 
 # ============================================================
 # SEMÁFORO
@@ -1251,16 +1904,23 @@ def construir_scorecard_mensual(
     excluir_personas: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Construye la matriz enero-diciembre.
+    Construye la matriz mensual enero-diciembre.
 
-    Filas:
-        Meta
-        cita agendada
-        cita efectiva
-        N1
-        N2
-        N3
-        % efectividad
+    Indicadores:
+    - Meta
+    - cita agendada
+    - cita efectiva
+    - % efectividad
+    - % cumplimiento de meta
+    - N1
+    - N2
+    - N3
+
+    % efectividad:
+        cita efectiva / cita agendada
+
+    % cumplimiento de meta:
+        cita efectiva / meta
     """
 
     base = filtrar_detalle_scorecard(
@@ -1268,72 +1928,76 @@ def construir_scorecard_mensual(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
-    )
+    ).copy()
 
-    base = base.copy()
-
-    base[
-        "_fecha_cita"
-    ] = pd.to_datetime(
-        base[
-            "fecha_cita"
-        ],
+    base["_fecha_cita"] = pd.to_datetime(
+        base["fecha_cita"],
         errors="coerce",
     )
 
     base = base.loc[
-        base[
-            "_fecha_cita"
-        ].dt.year.eq(
-            anio
-        )
+        base["_fecha_cita"].dt.year.eq(anio)
     ].copy()
 
     filas = [
         "Meta",
         "cita agendada",
         "cita efectiva",
+        "% efectividad",
+        "% cumplimiento de meta",
         "N1",
         "N2",
         "N3",
-        "% efectividad",
     ]
 
     resultado = pd.DataFrame(
         index=filas,
-        columns=list(
-            MESES.values()
-        ),
+        columns=list(MESES.values()),
         dtype="object",
     )
 
     for numero_mes, nombre_mes in MESES.items():
 
-        mes = base.loc[
-            base[
-                "_fecha_cita"
-            ].dt.month.eq(
+        detalle_mes = base.loc[
+            base["_fecha_cita"].dt.month.eq(
                 numero_mes
             )
         ].copy()
 
         indicadores = calcular_indicadores_periodo(
-            mes
+            detalle_mes
         )
 
         meta = obtener_meta_mensual(
             configuracion_metas=
                 configuracion_metas,
-
             grupo=
                 grupo_meta,
-
             filtro_servicio=
                 filtro_servicio,
-
             mes=
                 numero_mes,
         )
+
+        efectivas = indicadores[
+            "cita_efectiva"
+        ]
+
+        if meta is None:
+            cumplimiento_meta = pd.NA
+
+        elif meta == 0:
+            cumplimiento_meta = 0.0
+
+        else:
+            cumplimiento_meta = round(
+                efectivas
+                /
+                meta
+                *
+                100,
+                1,
+            )
 
         resultado.loc[
             "Meta",
@@ -1354,9 +2018,19 @@ def construir_scorecard_mensual(
         resultado.loc[
             "cita efectiva",
             nombre_mes,
+        ] = efectivas
+
+        resultado.loc[
+            "% efectividad",
+            nombre_mes,
         ] = indicadores[
-            "cita_efectiva"
+            "efectividad_pct"
         ]
+
+        resultado.loc[
+            "% cumplimiento de meta",
+            nombre_mes,
+        ] = cumplimiento_meta
 
         resultado.loc[
             "N1",
@@ -1379,13 +2053,6 @@ def construir_scorecard_mensual(
             "n3"
         ]
 
-        resultado.loc[
-            "% efectividad",
-            nombre_mes,
-        ] = indicadores[
-            "efectividad_pct"
-        ]
-
     resultado.index.name = (
         "Nivel mensual"
     )
@@ -1401,13 +2068,17 @@ def construir_avance_al_dia(
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
+    feriados: set | list | tuple | None = None,
 ) -> dict:
     """
-    Calcula el avance contra la meta esperada hasta
-    fecha_corte.
+    Calcula el avance acumulado contra la meta diaria
+    ponderada.
 
-    Meta esperada:
-        meta mensual × día del mes / días del mes.
+    La meta acumulada respeta:
+    - lunes-viernes = 1
+    - sábado = 0.5
+    - domingo = 0
+    - feriado = 0
     """
 
     fecha_corte = pd.Timestamp(
@@ -1417,13 +2088,10 @@ def construir_avance_al_dia(
     meta_mensual = obtener_meta_mensual(
         configuracion_metas=
             configuracion_metas,
-
         grupo=
             grupo_meta,
-
         filtro_servicio=
             filtro_servicio,
-
         mes=
             fecha_corte.month,
     )
@@ -1433,9 +2101,7 @@ def construir_avance_al_dia(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
-    )
-
-    base = base.copy()
+    ).copy()
 
     base[
         "_fecha_cita"
@@ -1444,33 +2110,31 @@ def construir_avance_al_dia(
             "fecha_cita"
         ],
         errors="coerce",
-    )
-
-    base = base.loc[
-        base[
-            "_fecha_cita"
-        ].dt.year.eq(
-            fecha_corte.year
-        )
-        &
-        base[
-            "_fecha_cita"
-        ].dt.month.eq(
-            fecha_corte.month
-        )
-        &
-        base[
-            "_fecha_cita"
-        ].dt.date.le(
-            fecha_corte
-        )
-    ].copy()
+    ).dt.date
 
     efectivas = int(
         base.loc[
             base[
                 "es_efectiva"
-            ],
+            ]
+            &
+            base[
+                "_fecha_cita"
+            ].ge(
+                pd.Timestamp(
+                    year=
+                        fecha_corte.year,
+                    month=
+                        fecha_corte.month,
+                    day=1,
+                ).date()
+            )
+            &
+            base[
+                "_fecha_cita"
+            ].le(
+                fecha_corte
+            ),
             "id_cita",
         ].nunique()
     )
@@ -1500,19 +2164,28 @@ def construir_avance_al_dia(
                 "⚪ Meta no configurada",
         }
 
-    dias_mes = calendar.monthrange(
-        fecha_corte.year,
-        fecha_corte.month,
-    )[1]
-
-    meta_al_dia = (
-        float(
-            meta_mensual
+    distribucion = (
+        construir_distribucion_meta_diaria(
+            anio=
+                fecha_corte.year,
+            mes=
+                fecha_corte.month,
+            meta_mensual=
+                meta_mensual,
+            feriados=
+                feriados,
         )
-        *
-        fecha_corte.day
-        /
-        dias_mes
+    )
+
+    meta_al_dia = int(
+        distribucion.loc[
+            distribucion[
+                "fecha"
+            ].le(
+                fecha_corte
+            ),
+            "meta_dia",
+        ].sum()
     )
 
     diferencia = (
@@ -1560,27 +2233,17 @@ def construir_avance_al_dia(
     return {
         "meta_mensual":
             int(
-                round(
-                    meta_mensual
-                )
+                meta_mensual
             ),
 
         "meta_al_dia":
-            int(
-                round(
-                    meta_al_dia
-                )
-            ),
+            meta_al_dia,
 
         "efectivas_al_dia":
             efectivas,
 
         "diferencia":
-            int(
-                round(
-                    diferencia
-                )
-            ),
+            diferencia,
 
         "diferencia_pct":
             round(
@@ -1609,14 +2272,16 @@ def construir_evolucion_acumulada(
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
+    feriados: set | list | tuple | None = None,
 ) -> pd.DataFrame:
     """
-    Construye la curva diaria del mes:
+    Construye la evolución acumulada real del mes.
 
-        Meta acumulada
-        Citas efectivas acumuladas
+    Meta:
+        acumulación de la meta diaria ponderada.
 
-    Las efectivas se asignan a la fecha original de la cita.
+    Efectivas:
+        acumulación de citas efectivas según fecha de cita.
     """
 
     fecha_corte = pd.Timestamp(
@@ -1626,65 +2291,29 @@ def construir_evolucion_acumulada(
     meta_mensual = obtener_meta_mensual(
         configuracion_metas=
             configuracion_metas,
-
         grupo=
             grupo_meta,
-
         filtro_servicio=
             filtro_servicio,
-
         mes=
             fecha_corte.month,
     )
 
     if meta_mensual is None:
 
-        return pd.DataFrame(
-            columns=[
-                "fecha",
-                "dia",
-                "meta_acumulada",
-                "efectivas_acumuladas",
-            ]
+        return pd.DataFrame()
+
+    distribucion = (
+        construir_distribucion_meta_diaria(
+            anio=
+                fecha_corte.year,
+            mes=
+                fecha_corte.month,
+            meta_mensual=
+                meta_mensual,
+            feriados=
+                feriados,
         )
-
-    dias_mes = calendar.monthrange(
-        fecha_corte.year,
-        fecha_corte.month,
-    )[1]
-
-    calendario_mes = pd.DataFrame(
-        {
-            "fecha":
-                pd.date_range(
-                    start=(
-                        f"{fecha_corte.year}-"
-                        f"{fecha_corte.month:02d}-01"
-                    ),
-                    periods=dias_mes,
-                    freq="D",
-                )
-        }
-    )
-
-    calendario_mes[
-        "dia"
-    ] = calendario_mes[
-        "fecha"
-    ].dt.day
-
-    calendario_mes[
-        "meta_acumulada"
-    ] = (
-        float(
-            meta_mensual
-        )
-        *
-        calendario_mes[
-            "dia"
-        ]
-        /
-        dias_mes
     )
 
     base = filtrar_detalle_scorecard(
@@ -1692,9 +2321,7 @@ def construir_evolucion_acumulada(
         filtro_servicio=filtro_servicio,
         persona=persona,
         excluir_personas=excluir_personas,
-    )
-
-    base = base.copy()
+    ).copy()
 
     base[
         "_fecha_cita"
@@ -1703,7 +2330,7 @@ def construir_evolucion_acumulada(
             "fecha_cita"
         ],
         errors="coerce",
-    ).dt.normalize()
+    ).dt.date
 
     efectivas = base.loc[
         base[
@@ -1712,57 +2339,50 @@ def construir_evolucion_acumulada(
         &
         base[
             "_fecha_cita"
-        ].dt.year.eq(
-            fecha_corte.year
-        )
-        &
-        base[
-            "_fecha_cita"
-        ].dt.month.eq(
-            fecha_corte.month
-        )
-        &
-        base[
-            "_fecha_cita"
-        ].dt.date.le(
-            fecha_corte
+        ].apply(
+            lambda fecha:
+                (
+                    fecha is not None
+                    and
+                    fecha.year
+                    ==
+                    fecha_corte.year
+                    and
+                    fecha.month
+                    ==
+                    fecha_corte.month
+                )
         )
     ].copy()
 
     por_dia = (
         efectivas
         .groupby(
-            "_fecha_cita",
-            as_index=False,
-        )
-        .agg(
-            efectivas_dia=(
-                "id_cita",
-                "nunique",
-            )
-        )
-        .rename(
-            columns={
-                "_fecha_cita":
-                    "fecha",
-            }
-        )
+            "_fecha_cita"
+        )[
+            "id_cita"
+        ]
+        .nunique()
+        .to_dict()
     )
 
-    evolucion = calendario_mes.merge(
-        por_dia,
-        on="fecha",
-        how="left",
-    )
+    evolucion = distribucion[
+        [
+            "fecha",
+            "meta_acumulada",
+        ]
+    ].copy()
 
     evolucion[
         "efectivas_dia"
-    ] = (
-        evolucion[
-            "efectivas_dia"
-        ]
-        .fillna(0)
-        .astype(int)
+    ] = evolucion[
+        "fecha"
+    ].map(
+        por_dia
+    ).fillna(
+        0
+    ).astype(
+        int
     )
 
     evolucion[
@@ -1771,28 +2391,18 @@ def construir_evolucion_acumulada(
         "efectivas_dia"
     ].cumsum()
 
-    # No dibujamos una línea real artificial hacia el futuro.
     evolucion.loc[
         evolucion[
             "fecha"
-        ].dt.date.gt(
+        ].gt(
             fecha_corte
         ),
         "efectivas_acumuladas",
     ] = pd.NA
 
-    evolucion[
-        "meta_acumulada"
-    ] = evolucion[
-        "meta_acumulada"
-    ].round(
-        1
-    )
-
     return evolucion[
         [
             "fecha",
-            "dia",
             "meta_acumulada",
             "efectivas_acumuladas",
         ]

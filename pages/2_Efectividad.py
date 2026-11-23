@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-
+import calendar
 from database import (
     inicializar_base,
     cargar_detalle_efectividad,
@@ -18,9 +18,11 @@ from database import (
 
 from efectividad_reportes import (
     construir_scorecards_operativos,
+    construir_scorecard_diario,
+    calcular_comision_agente,
     CONFIG_METAS_2026,
+    CONFIG_INCENTIVOS_2026,
 )
-
 
 # ============================================================
 # CONFIGURACIÓN
@@ -361,6 +363,153 @@ def mostrar_scorecard(
             evolucion
         )
 
+def mostrar_scorecard_diario(
+    titulo: str,
+    tabla: pd.DataFrame,
+) -> None:
+    """
+    Muestra el seguimiento diario del mes actual.
+    """
+
+    st.markdown(
+        f"#### {titulo}"
+    )
+
+    if tabla.empty:
+
+        st.info(
+            "No existe una meta configurada."
+        )
+
+        return
+
+    def estilo_columna(
+        columna: pd.Series,
+    ):
+        """
+        Domingos en gris claro.
+        """
+
+        if str(
+            columna.name
+        ).endswith(
+            "-dom"
+        ):
+
+            return [
+                "background-color: rgba(128,128,128,0.14)"
+            ] * len(
+                columna
+            )
+
+        return [
+            ""
+        ] * len(
+            columna
+        )
+
+    styled = (
+        tabla.style
+        .apply(
+            estilo_columna,
+            axis=0,
+        )
+        .format(
+            na_rep="",
+        )
+    )
+
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        height=235,
+    )
+
+def mostrar_comision(
+    titulo: str,
+    comision: dict,
+) -> None:
+    """
+    Muestra el cálculo mensual de comisión.
+
+    La comisión siempre utiliza TODOS los servicios.
+    """
+
+    st.markdown(
+        f"#### 💰 Comisión — {titulo}"
+    )
+
+    if (
+        comision[
+            "meta"
+        ] is None
+        or
+        comision[
+            "incentivo_base"
+        ] is None
+    ):
+
+        st.info(
+            "Configuración de comisión incompleta."
+        )
+
+        return
+
+    c1, c2, c3 = st.columns(
+        3
+    )
+
+    c1.metric(
+        "Meta",
+        f"{comision['meta']:,}",
+    )
+
+    c2.metric(
+        "Resultado",
+        f"{comision['resultado']:,}",
+    )
+
+    c3.metric(
+        "Cumplimiento",
+        (
+            f"{comision['cumplimiento_pct']:.1f}%"
+        ),
+    )
+
+    c4, c5, c6 = st.columns(
+        3
+    )
+
+    c4.metric(
+        "Incentivo base",
+        (
+            f"S/ "
+            f"{comision['incentivo_base']:,.2f}"
+        ),
+    )
+
+    c5.metric(
+        "Factor aplicado",
+        (
+            f"{comision['factor_incentivo_pct']:.1f}%"
+        ),
+    )
+
+    c6.metric(
+        "Comisión proyectada",
+        (
+            f"S/ "
+            f"{comision['comision']:,.2f}"
+        ),
+    )
+
+    st.caption(
+        (
+            "La comisión se calcula siempre con "
+            "TODOS los servicios, independientemente "
+            "del filtro seleccionado arriba."
+        )
+    )
 
 # ============================================================
 # REVISIÓN MANUAL
@@ -638,6 +787,39 @@ with col_anio:
         ],
         index=0,
     )
+
+
+dias_mes_actual = pd.date_range(
+    start=(
+        f"{fecha_corte.year}-"
+        f"{fecha_corte.month:02d}-01"
+    ),
+    end=pd.Timestamp(
+        year=fecha_corte.year,
+        month=fecha_corte.month,
+        day=calendar.monthrange(
+            fecha_corte.year,
+            fecha_corte.month,
+        )[1],
+    ),
+    freq="D",
+)
+
+opciones_feriados = [
+    fecha.date()
+    for fecha in dias_mes_actual
+    if fecha.weekday() != 6
+]
+
+feriados = st.multiselect(
+    "Feriados del mes",
+    options=opciones_feriados,
+    default=[],
+    format_func=lambda fecha:
+        fecha.strftime(
+            "%d/%m/%Y"
+        ),
+)
 
 
 MAPA_FILTRO = {
