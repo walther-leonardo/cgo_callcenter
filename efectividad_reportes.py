@@ -872,6 +872,9 @@ def imprimir_auditoria_detalle(
 # SCORECARD DE EFECTIVIDAD
 # ============================================================
 
+import calendar
+
+
 MESES = {
     1: "enero",
     2: "febrero",
@@ -895,6 +898,126 @@ FILTROS_SERVICIO_VALIDOS = {
 }
 
 
+# ============================================================
+# METAS
+#
+# Coloca aquí los valores que defina Gerencia.
+#
+# IMPORTANTE:
+# - Preventivo y No Preventivo tienen metas independientes.
+# - TODOS se calcula automáticamente sumando ambas.
+# - No es necesario registrar una meta TOTAL aparte.
+# ============================================================
+
+CONFIG_METAS_2026 = {
+    "GENERAL": {
+        "PREVENTIVO": {
+            1:600,
+            2:533,
+            3:658,
+            4:551,
+            5:540,
+            6:596,
+            7:609,
+            8:533,
+            9:552,
+            10:542,
+            11:559,
+            12:560,
+        },
+        "NO_PREVENTIVO": {
+            1:563,
+            2:380,
+            3:433,
+            4:404,
+            5:381,
+            6:398,
+            7:469,
+            8:498,
+            9:532,
+            10:506,
+            11:441,
+            12:443,
+        },
+    },
+
+    "ROCIO": {
+        "PREVENTIVO": {
+            1:300,
+            2:267,
+            3:329,
+            4:276,
+            5:270,
+            6:298,
+            7:305,
+            8:267,
+            9:276,
+            10:271,
+            11:280,
+            12:280,
+        },
+        "NO_PREVENTIVO": {
+            1:282,
+            2:190,
+            3:217,
+            4:202,
+            5:191,
+            6:199,
+            7:235,
+            8:249,
+            9:266,
+            10:253,
+            11:221,
+            12:222,
+        },
+    },
+
+    "BRENDA": {
+        "PREVENTIVO": {
+            1:300,
+            2:267,
+            3:329,
+            4:276,
+            5:270,
+            6:298,
+            7:305,
+            8:267,
+            9:276,
+            10:271,
+            11:280,
+            12:280,
+        },
+        "NO_PREVENTIVO": {
+            1:282,
+            2:190,
+            3:217,
+            4:202,
+            5:191,
+            6:199,
+            7:235,
+            8:249,
+            9:266,
+            10:253,
+            11:221,
+            12:222,
+        },
+    },
+
+    "OTROS": {
+        "PREVENTIVO": {},
+        "NO_PREVENTIVO": {},
+    },
+}
+
+
+# ============================================================
+# SEMÁFORO
+# ============================================================
+
+UMBRAL_VERDE = 1.00
+UMBRAL_AMARILLO = 0.90
+
+
 def filtrar_detalle_scorecard(
     detalle: pd.DataFrame,
     filtro_servicio: str = "TODOS",
@@ -913,7 +1036,7 @@ def filtrar_detalle_scorecard(
         filtra una única persona acreditada.
 
     excluir_personas:
-        permite construir el grupo "Otros agentes".
+        permite construir el grupo Otros agentes.
     """
 
     filtro_servicio = (
@@ -928,12 +1051,9 @@ def filtrar_detalle_scorecard(
         filtro_servicio
         not in FILTROS_SERVICIO_VALIDOS
     ):
-
         raise ValueError(
             "Filtro de servicio no válido: "
-            f"{filtro_servicio}. "
-            "Use TODOS, PREVENTIVO "
-            "o NO_PREVENTIVO."
+            f"{filtro_servicio}"
         )
 
     resultado = detalle.copy()
@@ -971,12 +1091,81 @@ def filtrar_detalle_scorecard(
     return resultado
 
 
+def obtener_meta_mensual(
+    configuracion_metas: dict,
+    grupo: str,
+    filtro_servicio: str,
+    mes: int,
+):
+    """
+    Devuelve la meta correspondiente al grupo, filtro y mes.
+
+    TODOS:
+        Preventivo + No Preventivo.
+
+    Si alguna de las dos metas necesarias para TODOS no está
+    configurada, devuelve None para evitar mostrar una meta
+    parcial como si fuera total.
+    """
+
+    grupo = str(
+        grupo
+    ).upper()
+
+    filtro_servicio = str(
+        filtro_servicio
+    ).upper()
+
+    config_grupo = configuracion_metas.get(
+        grupo,
+        {},
+    )
+
+    preventivo = config_grupo.get(
+        "PREVENTIVO",
+        {},
+    ).get(
+        mes
+    )
+
+    no_preventivo = config_grupo.get(
+        "NO_PREVENTIVO",
+        {},
+    ).get(
+        mes
+    )
+
+    if filtro_servicio == "PREVENTIVO":
+        return preventivo
+
+    if filtro_servicio == "NO_PREVENTIVO":
+        return no_preventivo
+
+    if filtro_servicio == "TODOS":
+
+        if (
+            preventivo is None
+            or no_preventivo is None
+        ):
+            return None
+
+        return (
+            preventivo
+            +
+            no_preventivo
+        )
+
+    raise ValueError(
+        f"Filtro no reconocido: {filtro_servicio}"
+    )
+
+
 def calcular_indicadores_periodo(
     detalle: pd.DataFrame,
 ) -> dict:
     """
-    Calcula los indicadores básicos del scorecard
-    sobre un subconjunto ya filtrado.
+    Calcula indicadores básicos sobre un subconjunto
+    previamente filtrado.
     """
 
     agendadas = int(
@@ -1055,36 +1244,24 @@ def calcular_indicadores_periodo(
 def construir_scorecard_mensual(
     detalle: pd.DataFrame,
     anio: int,
-    meta: dict[int, float | int] | None = None,
-    cpu: dict[int, float | int] | None = None,
-    real: dict[int, float | int] | None = None,
+    grupo_meta: str,
+    configuracion_metas: dict,
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Construye la matriz mensual enero-diciembre.
+    Construye la matriz enero-diciembre.
 
-    Meta, CPU y Real son valores externos/hardcodeados.
-
-    Las claves de los diccionarios son números de mes:
-
-        {
-            1: valor_enero,
-            2: valor_febrero,
-            ...
-            12: valor_diciembre,
-        }
-
-    Diferencia:
-        cita efectiva - Real
-
-    Si Real no está informado, la diferencia queda vacía.
+    Filas:
+        Meta
+        cita agendada
+        cita efectiva
+        N1
+        N2
+        N3
+        % efectividad
     """
-
-    meta = meta or {}
-    cpu = cpu or {}
-    real = real or {}
 
     base = filtrar_detalle_scorecard(
         detalle=detalle,
@@ -1114,10 +1291,8 @@ def construir_scorecard_mensual(
 
     filas = [
         "Meta",
-        "CPU",
         "cita agendada",
         "cita efectiva",
-        "Diferencia cita efectiva de Real",
         "N1",
         "N2",
         "N3",
@@ -1132,9 +1307,7 @@ def construir_scorecard_mensual(
         dtype="object",
     )
 
-    for numero_mes, nombre_mes in (
-        MESES.items()
-    ):
+    for numero_mes, nombre_mes in MESES.items():
 
         mes = base.loc[
             base[
@@ -1144,26 +1317,31 @@ def construir_scorecard_mensual(
             )
         ].copy()
 
-        indicadores = (
-            calcular_indicadores_periodo(
-                mes
-            )
+        indicadores = calcular_indicadores_periodo(
+            mes
+        )
+
+        meta = obtener_meta_mensual(
+            configuracion_metas=
+                configuracion_metas,
+
+            grupo=
+                grupo_meta,
+
+            filtro_servicio=
+                filtro_servicio,
+
+            mes=
+                numero_mes,
         )
 
         resultado.loc[
             "Meta",
             nombre_mes,
-        ] = meta.get(
-            numero_mes,
-            pd.NA,
-        )
-
-        resultado.loc[
-            "CPU",
-            nombre_mes,
-        ] = cpu.get(
-            numero_mes,
-            pd.NA,
+        ] = (
+            meta
+            if meta is not None
+            else pd.NA
         )
 
         resultado.loc[
@@ -1179,29 +1357,6 @@ def construir_scorecard_mensual(
         ] = indicadores[
             "cita_efectiva"
         ]
-
-        real_mes = real.get(
-            numero_mes
-        )
-
-        if real_mes is None:
-
-            diferencia = pd.NA
-
-        else:
-
-            diferencia = (
-                indicadores[
-                    "cita_efectiva"
-                ]
-                -
-                real_mes
-            )
-
-        resultado.loc[
-            "Diferencia cita efectiva de Real",
-            nombre_mes,
-        ] = diferencia
 
         resultado.loc[
             "N1",
@@ -1238,27 +1393,40 @@ def construir_scorecard_mensual(
     return resultado
 
 
-def construir_scorecard_al_dia(
+def construir_avance_al_dia(
     detalle: pd.DataFrame,
     fecha_corte,
-    meta_al_dia: float | int | None = None,
-    cpu_al_dia: float | int | None = None,
-    real_al_dia: float | int | None = None,
+    grupo_meta: str,
+    configuracion_metas: dict,
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
-) -> pd.DataFrame:
+) -> dict:
     """
-    Construye la tabla compacta correspondiente al
-    mes de fecha_corte, desde el primer día del mes
-    hasta fecha_corte inclusive.
+    Calcula el avance contra la meta esperada hasta
+    fecha_corte.
 
-    Meta y CPU al día son hardcodeados.
+    Meta esperada:
+        meta mensual × día del mes / días del mes.
     """
 
     fecha_corte = pd.Timestamp(
         fecha_corte
     ).date()
+
+    meta_mensual = obtener_meta_mensual(
+        configuracion_metas=
+            configuracion_metas,
+
+        grupo=
+            grupo_meta,
+
+        filtro_servicio=
+            filtro_servicio,
+
+        mes=
+            fecha_corte.month,
+    )
 
     base = filtrar_detalle_scorecard(
         detalle=detalle,
@@ -1298,50 +1466,397 @@ def construir_scorecard_al_dia(
         )
     ].copy()
 
-    indicadores = (
-        calcular_indicadores_periodo(
-            base
-        )
+    efectivas = int(
+        base.loc[
+            base[
+                "es_efectiva"
+            ],
+            "id_cita",
+        ].nunique()
     )
 
-    if real_al_dia is None:
+    if meta_mensual is None:
 
-        diferencia = pd.NA
+        return {
+            "meta_mensual":
+                None,
+
+            "meta_al_dia":
+                None,
+
+            "efectivas_al_dia":
+                efectivas,
+
+            "diferencia":
+                None,
+
+            "diferencia_pct":
+                None,
+
+            "cumplimiento_pct":
+                None,
+
+            "estado":
+                "⚪ Meta no configurada",
+        }
+
+    dias_mes = calendar.monthrange(
+        fecha_corte.year,
+        fecha_corte.month,
+    )[1]
+
+    meta_al_dia = (
+        float(
+            meta_mensual
+        )
+        *
+        fecha_corte.day
+        /
+        dias_mes
+    )
+
+    diferencia = (
+        efectivas
+        -
+        meta_al_dia
+    )
+
+    diferencia_pct = (
+        diferencia
+        /
+        meta_al_dia
+        *
+        100
+        if meta_al_dia
+        else 0.0
+    )
+
+    cumplimiento = (
+        efectivas
+        /
+        meta_al_dia
+        if meta_al_dia
+        else 0.0
+    )
+
+    if cumplimiento >= UMBRAL_VERDE:
+
+        estado = (
+            "🟢 En meta / adelantado"
+        )
+
+    elif cumplimiento >= UMBRAL_AMARILLO:
+
+        estado = (
+            "🟡 Ligeramente atrasado"
+        )
 
     else:
 
-        diferencia = (
-            indicadores[
-                "cita_efectiva"
-            ]
-            -
-            real_al_dia
+        estado = (
+            "🔴 Atrasado"
         )
 
-    resultado = pd.DataFrame(
-        {
-            "Total": [
-                meta_al_dia,
-                cpu_al_dia,
-                indicadores[
-                    "cita_agendada"
-                ],
-                indicadores[
-                    "cita_efectiva"
-                ],
-                diferencia,
-            ],
-        },
-        index=[
-            "Meta al día de hoy",
-            "CPU al día de hoy",
-            "cita agendada hasta el día de hoy",
-            "cita efectiva hasta el día de hoy",
-            "Diferencia cita efectiva de Real",
-        ],
+    return {
+        "meta_mensual":
+            int(
+                round(
+                    meta_mensual
+                )
+            ),
+
+        "meta_al_dia":
+            int(
+                round(
+                    meta_al_dia
+                )
+            ),
+
+        "efectivas_al_dia":
+            efectivas,
+
+        "diferencia":
+            int(
+                round(
+                    diferencia
+                )
+            ),
+
+        "diferencia_pct":
+            round(
+                diferencia_pct,
+                1,
+            ),
+
+        "cumplimiento_pct":
+            round(
+                cumplimiento
+                *
+                100,
+                1,
+            ),
+
+        "estado":
+            estado,
+    }
+
+
+def construir_evolucion_acumulada(
+    detalle: pd.DataFrame,
+    fecha_corte,
+    grupo_meta: str,
+    configuracion_metas: dict,
+    filtro_servicio: str = "TODOS",
+    persona: str | None = None,
+    excluir_personas: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Construye la curva diaria del mes:
+
+        Meta acumulada
+        Citas efectivas acumuladas
+
+    Las efectivas se asignan a la fecha original de la cita.
+    """
+
+    fecha_corte = pd.Timestamp(
+        fecha_corte
+    ).date()
+
+    meta_mensual = obtener_meta_mensual(
+        configuracion_metas=
+            configuracion_metas,
+
+        grupo=
+            grupo_meta,
+
+        filtro_servicio=
+            filtro_servicio,
+
+        mes=
+            fecha_corte.month,
     )
 
-    return resultado
+    if meta_mensual is None:
+
+        return pd.DataFrame(
+            columns=[
+                "fecha",
+                "dia",
+                "meta_acumulada",
+                "efectivas_acumuladas",
+            ]
+        )
+
+    dias_mes = calendar.monthrange(
+        fecha_corte.year,
+        fecha_corte.month,
+    )[1]
+
+    calendario_mes = pd.DataFrame(
+        {
+            "fecha":
+                pd.date_range(
+                    start=(
+                        f"{fecha_corte.year}-"
+                        f"{fecha_corte.month:02d}-01"
+                    ),
+                    periods=dias_mes,
+                    freq="D",
+                )
+        }
+    )
+
+    calendario_mes[
+        "dia"
+    ] = calendario_mes[
+        "fecha"
+    ].dt.day
+
+    calendario_mes[
+        "meta_acumulada"
+    ] = (
+        float(
+            meta_mensual
+        )
+        *
+        calendario_mes[
+            "dia"
+        ]
+        /
+        dias_mes
+    )
+
+    base = filtrar_detalle_scorecard(
+        detalle=detalle,
+        filtro_servicio=filtro_servicio,
+        persona=persona,
+        excluir_personas=excluir_personas,
+    )
+
+    base = base.copy()
+
+    base[
+        "_fecha_cita"
+    ] = pd.to_datetime(
+        base[
+            "fecha_cita"
+        ],
+        errors="coerce",
+    ).dt.normalize()
+
+    efectivas = base.loc[
+        base[
+            "es_efectiva"
+        ]
+        &
+        base[
+            "_fecha_cita"
+        ].dt.year.eq(
+            fecha_corte.year
+        )
+        &
+        base[
+            "_fecha_cita"
+        ].dt.month.eq(
+            fecha_corte.month
+        )
+        &
+        base[
+            "_fecha_cita"
+        ].dt.date.le(
+            fecha_corte
+        )
+    ].copy()
+
+    por_dia = (
+        efectivas
+        .groupby(
+            "_fecha_cita",
+            as_index=False,
+        )
+        .agg(
+            efectivas_dia=(
+                "id_cita",
+                "nunique",
+            )
+        )
+        .rename(
+            columns={
+                "_fecha_cita":
+                    "fecha",
+            }
+        )
+    )
+
+    evolucion = calendario_mes.merge(
+        por_dia,
+        on="fecha",
+        how="left",
+    )
+
+    evolucion[
+        "efectivas_dia"
+    ] = (
+        evolucion[
+            "efectivas_dia"
+        ]
+        .fillna(0)
+        .astype(int)
+    )
+
+    evolucion[
+        "efectivas_acumuladas"
+    ] = evolucion[
+        "efectivas_dia"
+    ].cumsum()
+
+    # No dibujamos una línea real artificial hacia el futuro.
+    evolucion.loc[
+        evolucion[
+            "fecha"
+        ].dt.date.gt(
+            fecha_corte
+        ),
+        "efectivas_acumuladas",
+    ] = pd.NA
+
+    evolucion[
+        "meta_acumulada"
+    ] = evolucion[
+        "meta_acumulada"
+    ].round(
+        1
+    )
+
+    return evolucion[
+        [
+            "fecha",
+            "dia",
+            "meta_acumulada",
+            "efectivas_acumuladas",
+        ]
+    ]
+
+
+def construir_bloque_scorecard(
+    detalle: pd.DataFrame,
+    anio: int,
+    fecha_corte,
+    grupo_meta: str,
+    configuracion_metas: dict,
+    filtro_servicio: str,
+    persona: str | None = None,
+    excluir_personas: list[str] | None = None,
+) -> dict:
+    """
+    Construye todo lo necesario para una sección:
+    mensual + avance + evolución.
+    """
+
+    return {
+        "mensual":
+            construir_scorecard_mensual(
+                detalle=detalle,
+                anio=anio,
+                grupo_meta=grupo_meta,
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
+                persona=persona,
+                excluir_personas=
+                    excluir_personas,
+            ),
+
+        "avance":
+            construir_avance_al_dia(
+                detalle=detalle,
+                fecha_corte=fecha_corte,
+                grupo_meta=grupo_meta,
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
+                persona=persona,
+                excluir_personas=
+                    excluir_personas,
+            ),
+
+        "evolucion":
+            construir_evolucion_acumulada(
+                detalle=detalle,
+                fecha_corte=fecha_corte,
+                grupo_meta=grupo_meta,
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
+                persona=persona,
+                excluir_personas=
+                    excluir_personas,
+            ),
+    }
 
 
 def construir_scorecards_operativos(
@@ -1351,36 +1866,21 @@ def construir_scorecards_operativos(
     agente_a: str,
     agente_b: str,
     filtro_servicio: str = "TODOS",
-    configuracion: dict | None = None,
+    configuracion_metas: dict | None = None,
 ) -> dict:
     """
-    Construye los ocho bloques principales:
+    Construye los cuatro bloques del reporte:
 
-    - General mensual
-    - General al día
-    - Agente A mensual
-    - Agente A al día
-    - Agente B mensual
-    - Agente B al día
-    - Otros agentes mensual
-    - Otros agentes al día
-
-    La configuración contiene Meta, CPU y Real
-    de cada bloque.
+        General
+        Rocío
+        Brenda
+        Otros agentes
     """
 
-    configuracion = (
-        configuracion
-        or {}
-    )
+    if configuracion_metas is None:
 
-    def obtener_config(
-        clave: str,
-    ) -> dict:
-
-        return configuracion.get(
-            clave,
-            {}
+        configuracion_metas = (
+            CONFIG_METAS_2026
         )
 
     principales = [
@@ -1388,97 +1888,59 @@ def construir_scorecards_operativos(
         agente_b,
     ]
 
-    bloques = {
-        "general_mensual":
-            construir_scorecard_mensual(
+    return {
+        "general":
+            construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                filtro_servicio=filtro_servicio,
-                **obtener_config(
-                    "general_mensual"
-                ),
-            ),
-
-        "general_al_dia":
-            construir_scorecard_al_dia(
-                detalle=detalle,
                 fecha_corte=fecha_corte,
-                filtro_servicio=filtro_servicio,
-                **obtener_config(
-                    "general_al_dia"
-                ),
+                grupo_meta="GENERAL",
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
             ),
 
-        "agente_a_mensual":
-            construir_scorecard_mensual(
+        "rocio":
+            construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                filtro_servicio=filtro_servicio,
+                fecha_corte=fecha_corte,
+                grupo_meta="ROCIO",
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
                 persona=agente_a,
-                **obtener_config(
-                    "agente_a_mensual"
-                ),
             ),
 
-        "agente_a_al_dia":
-            construir_scorecard_al_dia(
-                detalle=detalle,
-                fecha_corte=fecha_corte,
-                filtro_servicio=filtro_servicio,
-                persona=agente_a,
-                **obtener_config(
-                    "agente_a_al_dia"
-                ),
-            ),
-
-        "agente_b_mensual":
-            construir_scorecard_mensual(
+        "brenda":
+            construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                filtro_servicio=filtro_servicio,
-                persona=agente_b,
-                **obtener_config(
-                    "agente_b_mensual"
-                ),
-            ),
-
-        "agente_b_al_dia":
-            construir_scorecard_al_dia(
-                detalle=detalle,
                 fecha_corte=fecha_corte,
-                filtro_servicio=filtro_servicio,
+                grupo_meta="BRENDA",
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
                 persona=agente_b,
-                **obtener_config(
-                    "agente_b_al_dia"
-                ),
             ),
 
-        "otros_mensual":
-            construir_scorecard_mensual(
+        "otros":
+            construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                filtro_servicio=filtro_servicio,
-                excluir_personas=principales,
-                **obtener_config(
-                    "otros_mensual"
-                ),
-            ),
-
-        "otros_al_dia":
-            construir_scorecard_al_dia(
-                detalle=detalle,
                 fecha_corte=fecha_corte,
-                filtro_servicio=filtro_servicio,
-                excluir_personas=principales,
-                **obtener_config(
-                    "otros_al_dia"
-                ),
+                grupo_meta="OTROS",
+                configuracion_metas=
+                    configuracion_metas,
+                filtro_servicio=
+                    filtro_servicio,
+                excluir_personas=
+                    principales,
             ),
     }
-
-    return bloques
-
-
 
 
 

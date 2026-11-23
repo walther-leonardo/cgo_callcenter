@@ -74,7 +74,6 @@ def inicializar_base() -> None:
             """
         )
 
-
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS citas_maestro (
@@ -384,6 +383,74 @@ def inicializar_base() -> None:
             )
             """
         )
+
+        # ====================================================
+        # DETALLE MAESTRO — EFECTIVIDAD
+        # ====================================================
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS efectividad_detalle (
+                id_cita TEXT PRIMARY KEY,
+
+                appointment_number INTEGER,
+                fecha_cita TEXT NOT NULL,
+                hora_cita TEXT,
+
+                placa_normalizada TEXT,
+                motivos TEXT,
+                grupo_servicio TEXT,
+
+                agente TEXT,
+                persona_creditada TEXT,
+                canal_agenda TEXT,
+
+                status TEXT,
+
+                fecha_visita TEXT,
+                es_efectiva INTEGER NOT NULL,
+
+                nivel TEXT,
+                diferencia_dias INTEGER,
+
+                resultado_efectividad TEXT,
+                confirmacion_presencia TEXT,
+
+                numeros_cotizacion TEXT,
+                numeros_orden TEXT,
+
+                tipo_asignacion TEXT,
+                requiere_revision_manual INTEGER NOT NULL,
+
+                criterio_matching TEXT,
+                presencia_id TEXT,
+
+                fecha_actualizacion TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_efectividad_detalle_fecha
+            ON efectividad_detalle (
+                fecha_cita
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_efectividad_detalle_agente
+            ON efectividad_detalle (
+                persona_creditada,
+                fecha_cita
+            )
+            """
+        )
+
 
         conn.commit()
 
@@ -1112,3 +1179,283 @@ def listar_candidatas_conflicto_matching(
                 presencia_id,
             ],
         )
+
+
+def guardar_detalle_efectividad(
+    detalle: pd.DataFrame,
+    desde,
+    hasta,
+) -> int:
+    """
+    Sustituye completamente el detalle de efectividad
+    correspondiente al período [desde, hasta).
+
+    Esta estrategia es intencional:
+
+    si una cita anteriormente válida fue posteriormente
+    cancelada, eliminada o sustituida por un duplicado,
+    desaparece del período al recalcularlo.
+    """
+
+    columnas = [
+        "id_cita",
+        "appointment_number",
+        "fecha_cita",
+        "hora_cita",
+        "placa_normalizada",
+        "motivos",
+        "grupo_servicio",
+        "agente",
+        "persona_creditada",
+        "canal_agenda",
+        "status",
+        "fecha_visita",
+        "es_efectiva",
+        "nivel",
+        "diferencia_dias",
+        "resultado_efectividad",
+        "confirmacion_presencia",
+        "numeros_cotizacion",
+        "numeros_orden",
+        "tipo_asignacion",
+        "requiere_revision_manual",
+        "criterio_matching",
+        "presencia_id",
+    ]
+
+    faltantes = [
+        columna
+        for columna in columnas
+        if columna not in detalle.columns
+    ]
+
+    if faltantes:
+
+        raise ValueError(
+            "Faltan columnas para guardar efectividad: "
+            f"{faltantes}"
+        )
+
+    ahora = datetime.now(
+        ZONA_LIMA
+    ).isoformat(
+        timespec="seconds"
+    )
+
+    registros = detalle[
+        columnas
+    ].copy()
+
+    registros[
+        "fecha_cita"
+    ] = registros[
+        "fecha_cita"
+    ].astype(str)
+
+    registros[
+        "fecha_visita"
+    ] = registros[
+        "fecha_visita"
+    ].apply(
+        lambda valor:
+            (
+                None
+                if pd.isna(valor)
+                else str(valor)
+            )
+    )
+
+    registros[
+        "es_efectiva"
+    ] = registros[
+        "es_efectiva"
+    ].astype(int)
+
+    registros[
+        "requiere_revision_manual"
+    ] = registros[
+        "requiere_revision_manual"
+    ].astype(int)
+
+    registros[
+        "fecha_actualizacion"
+    ] = ahora
+
+    registros = registros.where(
+        pd.notna(registros),
+        None,
+    )
+
+    registros = registros.to_dict(
+        orient="records"
+    )
+
+    with get_connection() as conn:
+
+        # ----------------------------------------------------
+        # REEMPLAZAR EL PERÍODO COMPLETO
+        # ----------------------------------------------------
+
+        conn.execute(
+            """
+            DELETE FROM efectividad_detalle
+            WHERE fecha_cita >= ?
+              AND fecha_cita < ?
+            """,
+            (
+                str(desde),
+                str(hasta),
+            ),
+        )
+
+        conn.executemany(
+            """
+            INSERT INTO efectividad_detalle (
+                id_cita,
+                appointment_number,
+                fecha_cita,
+                hora_cita,
+                placa_normalizada,
+                motivos,
+                grupo_servicio,
+                agente,
+                persona_creditada,
+                canal_agenda,
+                status,
+                fecha_visita,
+                es_efectiva,
+                nivel,
+                diferencia_dias,
+                resultado_efectividad,
+                confirmacion_presencia,
+                numeros_cotizacion,
+                numeros_orden,
+                tipo_asignacion,
+                requiere_revision_manual,
+                criterio_matching,
+                presencia_id,
+                fecha_actualizacion
+            )
+            VALUES (
+                :id_cita,
+                :appointment_number,
+                :fecha_cita,
+                :hora_cita,
+                :placa_normalizada,
+                :motivos,
+                :grupo_servicio,
+                :agente,
+                :persona_creditada,
+                :canal_agenda,
+                :status,
+                :fecha_visita,
+                :es_efectiva,
+                :nivel,
+                :diferencia_dias,
+                :resultado_efectividad,
+                :confirmacion_presencia,
+                :numeros_cotizacion,
+                :numeros_orden,
+                :tipo_asignacion,
+                :requiere_revision_manual,
+                :criterio_matching,
+                :presencia_id,
+                :fecha_actualizacion
+            )
+            """,
+            registros,
+        )
+
+        conn.commit()
+
+    return len(
+        registros
+    )
+
+
+def cargar_detalle_efectividad(
+    anio: int | None = None,
+) -> pd.DataFrame:
+    """
+    Carga el detalle maestro utilizado por los reportes
+    de Streamlit.
+    """
+
+    consulta = """
+        SELECT *
+        FROM efectividad_detalle
+    """
+
+    parametros = []
+
+    if anio is not None:
+
+        consulta += """
+            WHERE fecha_cita >= ?
+              AND fecha_cita < ?
+        """
+
+        parametros = [
+            f"{anio}-01-01",
+            f"{anio + 1}-01-01",
+        ]
+
+    consulta += """
+        ORDER BY
+            fecha_cita,
+            hora_cita,
+            appointment_number
+    """
+
+    with get_connection() as conn:
+
+        detalle = pd.read_sql_query(
+            consulta,
+            conn,
+            params=parametros,
+        )
+
+    if detalle.empty:
+        return detalle
+
+    detalle[
+        "fecha_cita"
+    ] = pd.to_datetime(
+        detalle[
+            "fecha_cita"
+        ],
+        errors="coerce",
+    ).dt.date
+
+    detalle[
+        "fecha_visita"
+    ] = pd.to_datetime(
+        detalle[
+            "fecha_visita"
+        ],
+        errors="coerce",
+    ).dt.date
+
+    detalle[
+        "es_efectiva"
+    ] = detalle[
+        "es_efectiva"
+    ].astype(bool)
+
+    detalle[
+        "requiere_revision_manual"
+    ] = detalle[
+        "requiere_revision_manual"
+    ].astype(bool)
+
+    return detalle
+
+
+
+
+
+
+
+
+
+

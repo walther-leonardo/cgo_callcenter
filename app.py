@@ -7,7 +7,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from streamlit_autorefresh import st_autorefresh
-from database import get_connection
+from database import (
+    get_connection,
+    inicializar_base,
+    listar_conflictos_revision_matching,
+    listar_candidatas_conflicto_matching,
+    guardar_override_matching,
+    cerrar_conflicto_revision_matching,
+    listar_overrides_matching,
+)
 
 from procesamiento import construir_vista_operativa_citas
 from reportes import (
@@ -109,6 +117,308 @@ def aplicar_estilos_compactos() -> None:
 
 
 aplicar_estilos_compactos()
+
+def mostrar_revision_manual_efectividad() -> None:
+    """
+    Interfaz de supervisión para resolver conflictos reales
+    del matching de efectividad.
+
+    Streamlit no recalcula Databricks.
+    Solo consume la cola SQLite generada por el motor
+    y guarda decisiones mediante el mismo mecanismo
+    utilizado por el terminal.
+    """
+
+    inicializar_base()
+
+    st.divider()
+
+    st.subheader(
+        "⚖️ Efectividad — revisión manual"
+    )
+
+    st.caption(
+        (
+            "Casos donde el motor no puede determinar "
+            "objetivamente qué cita debe recibir "
+            "la efectividad."
+        )
+    )
+
+    tab_pendientes, tab_decisiones = st.tabs(
+        [
+            "⚠️ Casos por revisar",
+            "✅ Decisiones guardadas",
+        ]
+    )
+
+    # ========================================================
+    # CASOS PENDIENTES
+    # ========================================================
+
+    with tab_pendientes:
+
+        conflictos = (
+            listar_conflictos_revision_matching()
+        )
+
+        if conflictos.empty:
+
+            st.success(
+                "No existen casos pendientes de revisión."
+            )
+
+        else:
+
+            st.info(
+                (
+                    f"Existen {len(conflictos):,} "
+                    "caso(s) pendiente(s)."
+                )
+            )
+
+            for conflicto in conflictos.itertuples(
+                index=False
+            ):
+
+                presencia_id = (
+                    conflicto.presencia_id
+                )
+
+                titulo = (
+                    f"🚗 {conflicto.placa} · "
+                    f"{conflicto.fecha_visita} · "
+                    f"N{conflicto.nivel}"
+                )
+
+                with st.expander(
+                    titulo,
+                    expanded=True,
+                ):
+
+                    candidatas = (
+                        listar_candidatas_conflicto_matching(
+                            presencia_id
+                        )
+                    )
+
+                    if candidatas.empty:
+
+                        st.warning(
+                            "El caso no tiene citas candidatas."
+                        )
+
+                        continue
+
+                    vista = candidatas[
+                        [
+                            "appointment_number",
+                            "agente",
+                            "fecha_hora_cita",
+                            "motivos",
+                            "diferencia_dias",
+                        ]
+                    ].copy()
+
+                    vista = vista.rename(
+                        columns={
+                            "appointment_number":
+                                "Cita",
+
+                            "agente":
+                                "Agente",
+
+                            "fecha_hora_cita":
+                                "Fecha / hora cita",
+
+                            "motivos":
+                                "Motivo",
+
+                            "diferencia_dias":
+                                "Diferencia días",
+                        }
+                    )
+
+                    st.dataframe(
+                        vista,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    opciones = {}
+
+                    for fila in candidatas.itertuples(
+                        index=False
+                    ):
+
+                        etiqueta = (
+                            f"Cita #{fila.appointment_number}"
+                            f" — {fila.agente}"
+                            f" — {fila.motivos}"
+                        )
+
+                        opciones[
+                            etiqueta
+                        ] = fila
+
+                    clave_formulario = (
+                        "resolver_efectividad_"
+                        +
+                        presencia_id.replace(
+                            "|",
+                            "_",
+                        )
+                    )
+
+                    with st.form(
+                        clave_formulario
+                    ):
+
+                        seleccion = st.selectbox(
+                            (
+                                "¿Qué cita debe recibir "
+                                "la efectividad?"
+                            ),
+                            options=list(
+                                opciones.keys()
+                            ),
+                        )
+
+                        st.caption(
+                            (
+                                "La decisión será permanente "
+                                "y se reutilizará en futuros "
+                                "recálculos."
+                            )
+                        )
+
+                        guardar = (
+                            st.form_submit_button(
+                                "✅ Guardar decisión",
+                                type="primary",
+                                use_container_width=True,
+                            )
+                        )
+
+                        if guardar:
+
+                            elegida = opciones[
+                                seleccion
+                            ]
+
+                            guardar_override_matching(
+                                presencia_id=
+                                    presencia_id,
+
+                                id_cita_elegida=
+                                    elegida.id_cita,
+
+                                appointment_number=
+                                    elegida.appointment_number,
+
+                                persona_creditada=
+                                    elegida.agente,
+
+                                canal_decision=
+                                    "STREAMLIT",
+
+                                usuario_decision=
+                                    "SUPERVISORA",
+
+                                motivo=
+                                    (
+                                        "CONFLICTO_"
+                                        "MATCHING_EFECTIVIDAD"
+                                    ),
+                            )
+
+                            cerrar_conflicto_revision_matching(
+                                presencia_id
+                            )
+
+                            st.success(
+                                (
+                                    "Decisión guardada: "
+                                    f"cita "
+                                    f"#{elegida.appointment_number}"
+                                    f" → {elegida.agente}"
+                                )
+                            )
+
+                            st.rerun()
+
+    # ========================================================
+    # DECISIONES GUARDADAS
+    # ========================================================
+
+    with tab_decisiones:
+
+        registros = listar_overrides_matching(
+            solo_activos=True
+        )
+
+        if not registros:
+
+            st.info(
+                (
+                    "Todavía no existen decisiones "
+                    "manuales guardadas."
+                )
+            )
+
+            return
+
+        overrides = pd.DataFrame(
+            registros
+        )
+
+        columnas = [
+            "presencia_id",
+            "appointment_number",
+            "persona_creditada",
+            "canal_decision",
+            "usuario_decision",
+            "fecha_actualizacion",
+        ]
+
+        columnas = [
+            columna
+            for columna in columnas
+            if columna in overrides.columns
+        ]
+
+        vista = overrides[
+            columnas
+        ].copy()
+
+        vista = vista.rename(
+            columns={
+                "presencia_id":
+                    "Presencia",
+
+                "appointment_number":
+                    "Cita",
+
+                "persona_creditada":
+                    "Persona acreditada",
+
+                "canal_decision":
+                    "Canal",
+
+                "usuario_decision":
+                    "Usuario",
+
+                "fecha_actualizacion":
+                    "Última actualización",
+            }
+        )
+
+        st.dataframe(
+            vista,
+            use_container_width=True,
+            hide_index=True,
+        )
+
 
 
 # ============================================================
@@ -2591,4 +2901,6 @@ with st.expander(
                 use_container_width=True,
                 hide_index=True,
             )
+
+mostrar_revision_manual_efectividad()
 

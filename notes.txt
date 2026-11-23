@@ -108,3 +108,13 @@ py -m py_compile actualizador.py
 py -m py_compile collector.py
 py -c "from retencion import aplicar_retencion_citas_snapshot; print(aplicar_retencion_citas_snapshot())"
 --------------------------------------------------------------------
+
+
+
+--------------------------------------------------------------------
+🔹
+procedimiento par arecontruir la efectividad por mes
+
+py -m scripts.diagnostico_efectividad_databricks --desde 2026-09-01 --hasta 2026-10-01 --explorar-dias 7
+py -m scripts.diagnostico_efectividad_databricks --desde 2026-10-01 --hasta 2026-11-01 --explorar-dias 7
+py -m scripts.diagnostico_efectividad_databricks --desde 2026-11-01 --hasta 2026-11-23 --explorar-dias 7

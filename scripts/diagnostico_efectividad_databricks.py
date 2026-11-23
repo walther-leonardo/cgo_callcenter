@@ -32,9 +32,9 @@ from database import (
     inicializar_base,
     obtener_override_matching,
     guardar_override_matching,
-    limpiar_conflictos_revision_matching,
     guardar_conflicto_revision_matching,
     cerrar_conflicto_revision_matching,
+    guardar_detalle_efectividad,
 )
 
 # ============================================================
@@ -4555,24 +4555,20 @@ def resolver_revisiones_matching_terminal(
     resolver_en_terminal: bool = True,
 ) -> pd.DataFrame:
     """
-    Resuelve conflictos reales del matching global.
+    Resuelve los conflictos reales del matching global.
 
-    Flujo:
-    1. reconstruye las candidatas válidas;
-    2. consulta decisiones manuales persistidas;
-    3. reutiliza automáticamente una decisión previa
-       cuando todavía es válida;
-    4. pregunta por terminal únicamente cuando no existe
-       una decisión reutilizable;
-    5. persiste la nueva elección en SQLite.
+    Comportamiento:
+    - reutiliza overrides ya guardados;
+    - guarda en SQLite los conflictos todavía no resueltos;
+    - en modo interactivo permite resolverlos por terminal;
+    - en modo no interactivo los deja disponibles para Streamlit.
 
-    Esta función modifica únicamente el matching final.
-    No modifica citas ni presencias originales.
+    IMPORTANTE:
+    No vacía globalmente la cola de pendientes, porque podría
+    eliminar conflictos pertenecientes a otra ejecución o período.
     """
 
     resultado = matches.copy()
-
-    limpiar_conflictos_revision_matching()
 
     revisar = resultado.loc[
         resultado[
@@ -4603,7 +4599,7 @@ def resolver_revisiones_matching_terminal(
     print("=" * 88)
 
     print(
-        f"Conflictos pendientes: "
+        f"Conflictos detectados: "
         f"{len(revisar):,}"
     )
 
@@ -4612,10 +4608,6 @@ def resolver_revisiones_matching_terminal(
         elegida: pd.Series,
         origen_decision: str,
     ) -> None:
-        """
-        Aplica una candidata sobre la fila actual
-        del matching.
-        """
 
         nivel = int(
             elegida[
@@ -4733,10 +4725,6 @@ def resolver_revisiones_matching_terminal(
         start=1,
     ):
 
-        # ====================================================
-        # CITAS QUE YA OBTUVIERON OTRA PRESENCIA
-        # ====================================================
-
         ids_matcheados = set(
             resultado[
                 "id_cita"
@@ -4793,7 +4781,6 @@ def resolver_revisiones_matching_terminal(
             )
         ].copy()
 
-        # El match actual también forma parte de las opciones.
         actual = candidatos.loc[
             candidatos[
                 "id_cita"
@@ -4846,41 +4833,36 @@ def resolver_revisiones_matching_terminal(
         ]
 
         # ====================================================
-        # 1. BUSCAR DECISIÓN HISTÓRICA
+        # 1. REUTILIZAR OVERRIDE EXISTENTE
         # ====================================================
 
-        override = (
-            obtener_override_matching(
-                presencia_id
-            )
+        override = obtener_override_matching(
+            presencia_id
         )
 
         if override is not None:
 
-            candidata_guardada = (
-                opciones.loc[
-                    opciones[
-                        "id_cita"
-                    ]
-                    .astype(str)
-                    .eq(
-                        str(
-                            override[
-                                "id_cita_elegida"
-                            ]
-                        )
-                    )
+            candidata_guardada = opciones.loc[
+                opciones[
+                    "id_cita"
                 ]
-            )
+                .astype(str)
+                .eq(
+                    str(
+                        override[
+                            "id_cita_elegida"
+                        ]
+                    )
+                )
+            ]
 
             if len(
                 candidata_guardada
             ) == 1:
 
-                elegida = (
-                    candidata_guardada
-                    .iloc[0]
-                )
+                elegida = candidata_guardada.iloc[
+                    0
+                ]
 
                 aplicar_decision(
                     indice_match=
@@ -4891,6 +4873,10 @@ def resolver_revisiones_matching_terminal(
 
                     origen_decision=
                         "OVERRIDE_GUARDADO",
+                )
+
+                cerrar_conflicto_revision_matching(
+                    presencia_id
                 )
 
                 print()
@@ -4918,18 +4904,61 @@ def resolver_revisiones_matching_terminal(
 
             print()
             print(
-                "⚠️ Existe una decisión guardada para "
-                f"{presencia_id}, pero la cita elegida "
-                "ya no pertenece al conjunto actual de "
-                "candidatas."
-            )
-
-            print(
-                "   Se solicitará una nueva decisión."
+                "⚠️ Existe un override para "
+                f"{presencia_id}, pero su cita ya "
+                "no es candidata válida."
             )
 
         # ====================================================
-        # 2. PEDIR DECISIÓN
+        # 2. GUARDAR CASO PARA STREAMLIT
+        # ====================================================
+
+        guardar_conflicto_revision_matching(
+            presencia_id=
+                presencia_id,
+
+            placa=
+                match[
+                    "placa_normalizada"
+                ],
+
+            fecha_visita=
+                match[
+                    "fecha_visita"
+                ],
+
+            nivel=
+                int(
+                    match[
+                        "nivel_efectividad"
+                    ]
+                ),
+
+            candidatas=
+                opciones,
+        )
+
+        # ====================================================
+        # 3. MODO AUTOMÁTICO / NO INTERACTIVO
+        # ====================================================
+
+        if not resolver_en_terminal:
+
+            print()
+            print(
+                "⚠️ Caso enviado a revisión "
+                "en Streamlit:"
+            )
+
+            print(
+                f"   Presencia : "
+                f"{presencia_id}"
+            )
+
+            continue
+
+        # ====================================================
+        # 4. RESOLUCIÓN INTERACTIVA POR TERMINAL
         # ====================================================
 
         print()
@@ -5018,7 +5047,7 @@ def resolver_revisiones_matching_terminal(
 
         print()
         print(
-            "  0. Dejar pendiente"
+            "  0. Dejar pendiente para Streamlit"
         )
 
         while True:
@@ -5031,7 +5060,8 @@ def resolver_revisiones_matching_terminal(
             if respuesta == "0":
 
                 print(
-                    "⚠️ Conflicto dejado pendiente."
+                    "⚠️ Caso conservado como pendiente "
+                    "para la supervisora."
                 )
 
                 break
@@ -5104,6 +5134,10 @@ def resolver_revisiones_matching_terminal(
                     "CONFLICTO_MATCHING_EFECTIVIDAD",
             )
 
+            cerrar_conflicto_revision_matching(
+                presencia_id
+            )
+
             print(
                 f"✅ Efectividad asignada a "
                 f"cita #"
@@ -5131,6 +5165,7 @@ def resolver_revisiones_matching_terminal(
             drop=True
         )
     )
+
 
 def main() -> None:
 
@@ -5336,6 +5371,18 @@ def main() -> None:
         detalle=detalle_efectividad,
         citas=citas,
         matches=matches,
+    )
+
+    registros_guardados = guardar_detalle_efectividad(
+        detalle=detalle_efectividad,
+        desde=desde,
+        hasta=hasta,
+    )
+
+    print()
+    print(
+        "💾 Detalle de efectividad actualizado: "
+        f"{registros_guardados:,} registros."
     )
 
 
