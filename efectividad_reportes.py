@@ -880,7 +880,12 @@ def imprimir_auditoria_detalle(
 # ============================================================
 
 import calendar
+import math
 
+
+# ============================================================
+# CATÁLOGOS
+# ============================================================
 
 MESES = {
     1: "enero",
@@ -897,6 +902,7 @@ MESES = {
     12: "diciembre",
 }
 
+
 DIAS_SEMANA_CORTO = {
     0: "lun",
     1: "mar",
@@ -908,17 +914,745 @@ DIAS_SEMANA_CORTO = {
 }
 
 
-PESO_LUNES_VIERNES = 1.0
-PESO_SABADO = 0.5
-PESO_DOMINGO = 0.0
-
-
 FILTROS_SERVICIO_VALIDOS = {
     "TODOS",
     "PREVENTIVO",
     "NO_PREVENTIVO",
 }
 
+
+# ============================================================
+# TIPOS DE SERVICIO
+#
+# Nombre técnico:
+#   PYP
+#
+# Nombre visual recomendado en Streamlit:
+#   P&P
+#
+# IMPORTANTE:
+# 01K pertenece comercialmente al grupo PREVENTIVO.
+# ============================================================
+
+TIPOS_SERVICIO_POR_GRUPO = {
+    "PREVENTIVO": {
+        "Preventivo",
+        "01K",
+    },
+
+    "NO_PREVENTIVO": {
+        "Correctivo",
+        "PYP",
+        "Diagnóstico",
+        "Garantía",
+        "INDETERMINADO",
+    },
+}
+
+
+TODOS_TIPOS_SERVICIO = (
+    TIPOS_SERVICIO_POR_GRUPO[
+        "PREVENTIVO"
+    ]
+    |
+    TIPOS_SERVICIO_POR_GRUPO[
+        "NO_PREVENTIVO"
+    ]
+)
+
+
+# ============================================================
+# DISTRIBUCIÓN DIARIA
+# ============================================================
+
+PESO_LUNES_VIERNES = 1.0
+PESO_SABADO = 0.5
+PESO_DOMINGO = 0.0
+
+
+# ============================================================
+# SEMÁFOROS
+#
+# Cumplimiento:
+#   >= 100% verde
+#   >= 90% amarillo
+#   < 90% rojo
+#
+# Efectividad:
+# valores preliminares, modificables cuando Gerencia
+# establezca una política formal.
+# ============================================================
+
+UMBRAL_CUMPLIMIENTO_VERDE = 100.0
+UMBRAL_CUMPLIMIENTO_AMARILLO = 90.0
+
+UMBRAL_EFECTIVIDAD_VERDE = 90.0
+UMBRAL_EFECTIVIDAD_AMARILLO = 80.0
+
+
+# ============================================================
+# METAS 2026
+#
+# Meta única:
+# - tabla mensual
+# - distribución diaria
+# - avance acumulado
+# - comisión
+#
+# TODOS = PREVENTIVO + NO_PREVENTIVO
+# ============================================================
+
+CONFIG_METAS_2026 = {
+    "GENERAL": {
+        "PREVENTIVO": {
+            1: 600,
+            2: 533,
+            3: 658,
+            4: 551,
+            5: 540,
+            6: 596,
+            7: 609,
+            8: 533,
+            9: 552,
+            10: 542,
+            11: 559,
+            12: 560,
+        },
+        "NO_PREVENTIVO": {
+            1: 563,
+            2: 380,
+            3: 433,
+            4: 404,
+            5: 381,
+            6: 398,
+            7: 469,
+            8: 498,
+            9: 532,
+            10: 506,
+            11: 441,
+            12: 443,
+        },
+    },
+
+    "ROCIO": {
+        "PREVENTIVO": {
+            1: 300,
+            2: 267,
+            3: 329,
+            4: 276,
+            5: 270,
+            6: 298,
+            7: 305,
+            8: 267,
+            9: 276,
+            10: 271,
+            11: 280,
+            12: 280,
+        },
+        "NO_PREVENTIVO": {
+            1: 282,
+            2: 190,
+            3: 217,
+            4: 202,
+            5: 191,
+            6: 199,
+            7: 235,
+            8: 249,
+            9: 266,
+            10: 253,
+            11: 221,
+            12: 222,
+        },
+    },
+
+    "BRENDA": {
+        "PREVENTIVO": {
+            1: 300,
+            2: 267,
+            3: 329,
+            4: 276,
+            5: 270,
+            6: 298,
+            7: 305,
+            8: 267,
+            9: 276,
+            10: 271,
+            11: 280,
+            12: 280,
+        },
+        "NO_PREVENTIVO": {
+            1: 282,
+            2: 190,
+            3: 217,
+            4: 202,
+            5: 191,
+            6: 199,
+            7: 235,
+            8: 249,
+            9: 266,
+            10: 253,
+            11: 221,
+            12: 222,
+        },
+    },
+
+    "OTROS": {
+        "PREVENTIVO": {},
+        "NO_PREVENTIVO": {},
+    },
+}
+
+
+# ============================================================
+# INCENTIVOS 2026
+#
+# La meta NO se duplica aquí.
+#
+# La comisión usa la misma meta definida arriba.
+# ============================================================
+
+CONFIG_INCENTIVOS_2026 = {
+    "ROCIO": {
+        11: 1000,
+        12: 1000,
+    },
+
+    "BRENDA": {
+        11: 1000,
+        12: 1000,
+    },
+}
+
+
+# ============================================================
+# CLASIFICACIÓN COMERCIAL
+# ============================================================
+
+def _clasificar_grupo_servicio(
+    motivo,
+) -> str:
+    """
+    Agrupa los servicios según la lógica comercial
+    de efectividad.
+
+    PREVENTIVO:
+    - Preventivo
+    - 01K
+
+    NO_PREVENTIVO:
+    - Correctivo
+    - PYP
+    - Diagnóstico
+    - Garantía
+    - Indeterminado
+    """
+
+    _, tipo_servicio = clasificar_servicio(
+        motivo
+    )
+
+    if tipo_servicio in {
+        "Preventivo",
+        "01K",
+    }:
+        return "PREVENTIVO"
+
+    return "NO_PREVENTIVO"
+
+
+def obtener_tipo_servicio(
+    motivo,
+) -> str:
+    """
+    Devuelve el tipo de servicio normalizado utilizado
+    por la segunda capa de filtros.
+    """
+
+    _, tipo_servicio = clasificar_servicio(
+        motivo
+    )
+
+    if (
+        not tipo_servicio
+        or tipo_servicio == "INDETERMINADO"
+    ):
+        return "INDETERMINADO"
+
+    return tipo_servicio
+
+
+# ============================================================
+# META MENSUAL
+# ============================================================
+
+def obtener_meta_mensual(
+    configuracion_metas: dict,
+    grupo: str,
+    filtro_servicio: str,
+    mes: int,
+):
+    """
+    Obtiene la meta mensual correspondiente.
+
+    TODOS:
+        meta Preventivo + meta No Preventivo.
+
+    Si falta una parte de la configuración, devuelve None.
+    """
+
+    grupo = str(
+        grupo
+    ).upper()
+
+    filtro_servicio = str(
+        filtro_servicio
+    ).upper()
+
+    if filtro_servicio not in FILTROS_SERVICIO_VALIDOS:
+
+        raise ValueError(
+            f"Filtro no reconocido: {filtro_servicio}"
+        )
+
+    config_grupo = configuracion_metas.get(
+        grupo,
+        {},
+    )
+
+    preventivo = (
+        config_grupo
+        .get(
+            "PREVENTIVO",
+            {},
+        )
+        .get(
+            mes
+        )
+    )
+
+    no_preventivo = (
+        config_grupo
+        .get(
+            "NO_PREVENTIVO",
+            {},
+        )
+        .get(
+            mes
+        )
+    )
+
+    if filtro_servicio == "PREVENTIVO":
+        return preventivo
+
+    if filtro_servicio == "NO_PREVENTIVO":
+        return no_preventivo
+
+    if (
+        preventivo is None
+        or no_preventivo is None
+    ):
+        return None
+
+    return (
+        preventivo
+        +
+        no_preventivo
+    )
+
+
+# ============================================================
+# FILTRO CENTRAL
+# ============================================================
+
+def filtrar_detalle_scorecard(
+    detalle: pd.DataFrame,
+    filtro_servicio: str = "TODOS",
+    persona: str | None = None,
+    excluir_personas: list[str] | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Aplica todas las reglas de selección.
+
+    CAPA 1
+    ------
+    TODOS
+    PREVENTIVO
+    NO_PREVENTIVO
+
+    CAPA 2
+    ------
+    Tipo concreto de servicio:
+    Preventivo, 01K, Correctivo, PYP, Diagnóstico,
+    Garantía o INDETERMINADO.
+
+    La segunda capa permite decidir qué servicios cuentan
+    para KPI y comisión sin modificar el matching físico.
+    """
+
+    filtro_servicio = (
+        str(
+            filtro_servicio
+        )
+        .strip()
+        .upper()
+    )
+
+    if filtro_servicio not in FILTROS_SERVICIO_VALIDOS:
+
+        raise ValueError(
+            f"Filtro no válido: {filtro_servicio}"
+        )
+
+    resultado = detalle.copy()
+
+    # ========================================================
+    # RECLASIFICAR SIEMPRE DESDE MOTIVO
+    #
+    # No dependemos de una clasificación histórica guardada
+    # en SQLite, por lo que cambios como 01K -> Preventivo
+    # se reflejan inmediatamente.
+    # ========================================================
+
+    resultado[
+        "_tipo_servicio"
+    ] = resultado[
+        "motivos"
+    ].apply(
+        obtener_tipo_servicio
+    )
+
+    resultado[
+        "_grupo_servicio"
+    ] = resultado[
+        "motivos"
+    ].apply(
+        _clasificar_grupo_servicio
+    )
+
+    # ========================================================
+    # CAPA 1
+    # ========================================================
+
+    if filtro_servicio != "TODOS":
+
+        resultado = resultado.loc[
+            resultado[
+                "_grupo_servicio"
+            ].eq(
+                filtro_servicio
+            )
+        ].copy()
+
+    # ========================================================
+    # CAPA 2
+    # ========================================================
+
+    if tipos_servicio is not None:
+
+        tipos = set(
+            tipos_servicio
+        )
+
+        resultado = resultado.loc[
+            resultado[
+                "_tipo_servicio"
+            ].isin(
+                tipos
+            )
+        ].copy()
+
+    # ========================================================
+    # PERSONA
+    # ========================================================
+
+    if persona is not None:
+
+        resultado = resultado.loc[
+            resultado[
+                "persona_creditada"
+            ].eq(
+                persona
+            )
+        ].copy()
+
+    if excluir_personas:
+
+        resultado = resultado.loc[
+            ~resultado[
+                "persona_creditada"
+            ].isin(
+                excluir_personas
+            )
+        ].copy()
+
+    return resultado
+
+
+# ============================================================
+# INDICADORES
+# ============================================================
+
+def calcular_indicadores_periodo(
+    detalle: pd.DataFrame,
+) -> dict:
+    """
+    Calcula los indicadores base de cualquier período.
+    """
+
+    agendadas = int(
+        detalle[
+            "id_cita"
+        ].nunique()
+    )
+
+    efectivas = int(
+        detalle.loc[
+            detalle[
+                "es_efectiva"
+            ],
+            "id_cita",
+        ].nunique()
+    )
+
+    nivel_1 = int(
+        detalle[
+            "nivel"
+        ].eq(
+            "N1"
+        ).sum()
+    )
+
+    nivel_2 = int(
+        detalle[
+            "nivel"
+        ].eq(
+            "N2"
+        ).sum()
+    )
+
+    nivel_3 = int(
+        detalle[
+            "nivel"
+        ].eq(
+            "N3"
+        ).sum()
+    )
+
+    efectividad_pct = (
+        efectivas
+        /
+        agendadas
+        *
+        100
+        if agendadas
+        else 0.0
+    )
+
+    return {
+        "cita_agendada":
+            agendadas,
+
+        "cita_efectiva":
+            efectivas,
+
+        "n1":
+            nivel_1,
+
+        "n2":
+            nivel_2,
+
+        "n3":
+            nivel_3,
+
+        "efectividad_pct":
+            round(
+                efectividad_pct,
+                1,
+            ),
+    }
+
+
+# ============================================================
+# SCORECARD MENSUAL
+# ============================================================
+
+def construir_scorecard_mensual(
+    detalle: pd.DataFrame,
+    anio: int,
+    grupo_meta: str,
+    configuracion_metas: dict,
+    filtro_servicio: str = "TODOS",
+    persona: str | None = None,
+    excluir_personas: list[str] | None = None,
+    tipos_servicio: list[str] | set[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Matriz enero-diciembre.
+
+    % efectividad:
+        citas efectivas / citas agendadas
+
+    % cumplimiento de meta:
+        citas efectivas / meta
+    """
+
+    base = filtrar_detalle_scorecard(
+        detalle=detalle,
+        filtro_servicio=filtro_servicio,
+        persona=persona,
+        excluir_personas=excluir_personas,
+        tipos_servicio=tipos_servicio,
+    ).copy()
+
+    base[
+        "_fecha_cita"
+    ] = pd.to_datetime(
+        base[
+            "fecha_cita"
+        ],
+        errors="coerce",
+    )
+
+    base = base.loc[
+        base[
+            "_fecha_cita"
+        ].dt.year.eq(
+            anio
+        )
+    ].copy()
+
+    filas = [
+        "Meta",
+        "cita agendada",
+        "cita efectiva",
+        "% efectividad",
+        "% cumplimiento de meta",
+        "N1",
+        "N2",
+        "N3",
+    ]
+
+    resultado = pd.DataFrame(
+        index=filas,
+        columns=list(
+            MESES.values()
+        ),
+        dtype="object",
+    )
+
+    for numero_mes, nombre_mes in MESES.items():
+
+        detalle_mes = base.loc[
+            base[
+                "_fecha_cita"
+            ].dt.month.eq(
+                numero_mes
+            )
+        ].copy()
+
+        indicadores = calcular_indicadores_periodo(
+            detalle_mes
+        )
+
+        meta = obtener_meta_mensual(
+            configuracion_metas=
+                configuracion_metas,
+            grupo=
+                grupo_meta,
+            filtro_servicio=
+                filtro_servicio,
+            mes=
+                numero_mes,
+        )
+
+        efectivas = indicadores[
+            "cita_efectiva"
+        ]
+
+        if meta is None:
+
+            cumplimiento = pd.NA
+
+        elif meta == 0:
+
+            cumplimiento = 0.0
+
+        else:
+
+            cumplimiento = round(
+                efectivas
+                /
+                meta
+                *
+                100,
+                1,
+            )
+
+        resultado.loc[
+            "Meta",
+            nombre_mes,
+        ] = (
+            meta
+            if meta is not None
+            else pd.NA
+        )
+
+        resultado.loc[
+            "cita agendada",
+            nombre_mes,
+        ] = indicadores[
+            "cita_agendada"
+        ]
+
+        resultado.loc[
+            "cita efectiva",
+            nombre_mes,
+        ] = efectivas
+
+        resultado.loc[
+            "% efectividad",
+            nombre_mes,
+        ] = indicadores[
+            "efectividad_pct"
+        ]
+
+        resultado.loc[
+            "% cumplimiento de meta",
+            nombre_mes,
+        ] = cumplimiento
+
+        resultado.loc[
+            "N1",
+            nombre_mes,
+        ] = indicadores[
+            "n1"
+        ]
+
+        resultado.loc[
+            "N2",
+            nombre_mes,
+        ] = indicadores[
+            "n2"
+        ]
+
+        resultado.loc[
+            "N3",
+            nombre_mes,
+        ] = indicadores[
+            "n3"
+        ]
+
+    resultado.index.name = (
+        "Nivel mensual"
+    )
+
+    return resultado
+
+
+# ============================================================
+# DISTRIBUCIÓN DIARIA DE META
+# ============================================================
 
 def construir_distribucion_meta_diaria(
     anio: int,
@@ -927,23 +1661,18 @@ def construir_distribucion_meta_diaria(
     feriados: set | list | tuple | None = None,
 ) -> pd.DataFrame:
     """
-    Distribuye una meta mensual entre los días del mes.
+    Distribuye exactamente la meta mensual:
 
-    Pesos:
-    - lunes-viernes: 1.0
-    - sábado: 0.5
-    - domingo: 0
-    - feriado: 0
+    lunes-viernes = 1.0
+    sábado        = 0.5
+    domingo       = 0
+    feriado       = 0
 
-    La suma final de meta_dia coincide exactamente con
-    meta_mensual.
-
-    Los feriados deben recibirse como fechas o valores
-    convertibles a fecha.
+    Los feriados redistribuyen su carga hacia los demás
+    días disponibles del mes.
     """
 
     if meta_mensual is None:
-
         return pd.DataFrame()
 
     meta_mensual = int(
@@ -963,7 +1692,7 @@ def construir_distribucion_meta_diaria(
         for fecha in feriados
     }
 
-    dias_mes = calendar.monthrange(
+    cantidad_dias = calendar.monthrange(
         anio,
         mes,
     )[1]
@@ -972,7 +1701,7 @@ def construir_distribucion_meta_diaria(
 
     for dia in range(
         1,
-        dias_mes + 1,
+        cantidad_dias + 1,
     ):
 
         fecha = pd.Timestamp(
@@ -1000,19 +1729,15 @@ def construir_distribucion_meta_diaria(
 
         if es_domingo or es_feriado:
 
-            peso = 0.0
+            peso = PESO_DOMINGO
 
         elif es_sabado:
 
-            peso = (
-                PESO_SABADO
-            )
+            peso = PESO_SABADO
 
         else:
 
-            peso = (
-                PESO_LUNES_VIERNES
-            )
+            peso = PESO_LUNES_VIERNES
 
         registros.append(
             {
@@ -1048,15 +1773,17 @@ def construir_distribucion_meta_diaria(
         registros
     )
 
-    peso_total = distribucion[
-        "peso"
-    ].sum()
+    peso_total = float(
+        distribucion[
+            "peso"
+        ].sum()
+    )
 
     if peso_total <= 0:
 
         raise ValueError(
-            "El mes no contiene días disponibles "
-            "para distribuir la meta."
+            "No existen días disponibles para "
+            "distribuir la meta mensual."
         )
 
     distribucion[
@@ -1078,16 +1805,11 @@ def construir_distribucion_meta_diaria(
             "_cuota_exacta"
         ]
         .fillna(0)
+        .apply(
+            math.floor
+        )
         .astype(int)
     )
-
-    # ========================================================
-    # AJUSTE DE REDONDEO
-    #
-    # Garantiza:
-    #
-    # sum(meta_dia) == meta_mensual
-    # ========================================================
 
     faltante = (
         meta_mensual
@@ -1149,6 +1871,17 @@ def construir_distribucion_meta_diaria(
         "meta_dia"
     ].cumsum()
 
+    if int(
+        distribucion[
+            "meta_dia"
+        ].sum()
+    ) != meta_mensual:
+
+        raise ValueError(
+            "La distribución diaria no suma exactamente "
+            "la meta mensual."
+        )
+
     return distribucion[
         [
             "fecha",
@@ -1164,21 +1897,25 @@ def construir_distribucion_meta_diaria(
     ]
 
 
+# ============================================================
+# SCORECARD DIARIO
+# ============================================================
+
 def construir_scorecard_diario(
     detalle: pd.DataFrame,
     anio: int,
     mes: int,
     grupo_meta: str,
     configuracion_metas: dict,
-    fecha_corte,
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
-    feriados: set | list | tuple | None = None,
     tipos_servicio: list[str] | set[str] | None = None,
+    feriados: set | list | tuple | None = None,
+    fecha_corte=None,
 ) -> pd.DataFrame:
     """
-    Construye el scorecard diario del mes.
+    Scorecard del mes seleccionado.
 
     Filas:
     - Meta
@@ -1187,26 +1924,39 @@ def construir_scorecard_diario(
     - % efectividad
     - % cumplimiento de meta
 
-    Reglas:
-    - domingo: columna completamente vacía;
-    - feriado: sin meta, pero conserva actividad real;
-    - días futuros: conserva meta, pero los resultados
-      permanecen vacíos.
+    Domingo:
+        columna completamente vacía.
+
+    Feriado:
+        meta vacía, pero conserva actividad real si existió.
+
+    Día futuro:
+        conserva la meta planeada, pero no muestra resultados.
     """
 
-    fecha_corte = pd.Timestamp(
-        fecha_corte
-    ).date()
-
     meta_mensual = obtener_meta_mensual(
-        configuracion_metas=configuracion_metas,
-        grupo=grupo_meta,
-        filtro_servicio=filtro_servicio,
-        mes=mes,
+        configuracion_metas=
+            configuracion_metas,
+        grupo=
+            grupo_meta,
+        filtro_servicio=
+            filtro_servicio,
+        mes=
+            mes,
     )
 
     if meta_mensual is None:
         return pd.DataFrame()
+
+    if fecha_corte is None:
+
+        fecha_corte = pd.Timestamp.today().date()
+
+    else:
+
+        fecha_corte = pd.Timestamp(
+            fecha_corte
+        ).date()
 
     distribucion = construir_distribucion_meta_diaria(
         anio=anio,
@@ -1223,8 +1973,12 @@ def construir_scorecard_diario(
         tipos_servicio=tipos_servicio,
     ).copy()
 
-    base["_fecha_cita"] = pd.to_datetime(
-        base["fecha_cita"],
+    base[
+        "_fecha_cita"
+    ] = pd.to_datetime(
+        base[
+            "fecha_cita"
+        ],
         errors="coerce",
     ).dt.date
 
@@ -1254,7 +2008,7 @@ def construir_scorecard_diario(
         fecha = fila_dia.fecha
 
         # ----------------------------------------------------
-        # DOMINGO: columna completamente vacía
+        # DOMINGO
         # ----------------------------------------------------
 
         if fila_dia.es_domingo:
@@ -1284,15 +2038,16 @@ def construir_scorecard_diario(
         )
 
         # ----------------------------------------------------
-        # DÍA FUTURO:
-        # mostramos planificación, no resultados ficticios.
+        # FUTURO
         # ----------------------------------------------------
 
         if fecha > fecha_corte:
             continue
 
         detalle_dia = base.loc[
-            base["_fecha_cita"].eq(
+            base[
+                "_fecha_cita"
+            ].eq(
                 fecha
             )
         ].copy()
@@ -1324,7 +2079,7 @@ def construir_scorecard_diario(
 
         if (
             fila_dia.es_feriado
-            or meta_dia == 0
+            or meta_dia <= 0
         ):
 
             cumplimiento = pd.NA
@@ -1355,821 +2110,8 @@ def construir_scorecard_diario(
 
 
 # ============================================================
-# METAS
-#
-# Coloca aquí los valores que defina Gerencia.
-#
-# IMPORTANTE:
-# - Preventivo y No Preventivo tienen metas independientes.
-# - TODOS se calcula automáticamente sumando ambas.
-# - No es necesario registrar una meta TOTAL aparte.
+# AVANCE AL CORTE
 # ============================================================
-
-CONFIG_METAS_2026 = {
-    "GENERAL": {
-        "PREVENTIVO": {
-            1:600,
-            2:533,
-            3:658,
-            4:551,
-            5:540,
-            6:596,
-            7:609,
-            8:533,
-            9:552,
-            10:542,
-            11:559,
-            12:560,
-        },
-        "NO_PREVENTIVO": {
-            1:563,
-            2:380,
-            3:433,
-            4:404,
-            5:381,
-            6:398,
-            7:469,
-            8:498,
-            9:532,
-            10:506,
-            11:441,
-            12:443,
-        },
-    },
-
-    "ROCIO": {
-        "PREVENTIVO": {
-            1:300,
-            2:267,
-            3:329,
-            4:276,
-            5:270,
-            6:298,
-            7:305,
-            8:267,
-            9:276,
-            10:271,
-            11:280,
-            12:280,
-        },
-        "NO_PREVENTIVO": {
-            1:282,
-            2:190,
-            3:217,
-            4:202,
-            5:191,
-            6:199,
-            7:235,
-            8:249,
-            9:266,
-            10:253,
-            11:221,
-            12:222,
-        },
-    },
-
-    "BRENDA": {
-        "PREVENTIVO": {
-            1:300,
-            2:267,
-            3:329,
-            4:276,
-            5:270,
-            6:298,
-            7:305,
-            8:267,
-            9:276,
-            10:271,
-            11:280,
-            12:280,
-        },
-        "NO_PREVENTIVO": {
-            1:282,
-            2:190,
-            3:217,
-            4:202,
-            5:191,
-            6:199,
-            7:235,
-            8:249,
-            9:266,
-            10:253,
-            11:221,
-            12:222,
-        },
-    },
-
-    "OTROS": {
-        "PREVENTIVO": {},
-        "NO_PREVENTIVO": {},
-    },
-}
-
-CONFIG_INCENTIVOS_2026 = {
-    "ROCIO": {
-        11: 1000,
-        12: 1000,
-    },
-
-    "BRENDA": {
-        11: 1000,
-        12: 1000,
-    },
-}
-
-def calcular_comision_agente(
-    detalle: pd.DataFrame,
-    anio: int,
-    mes: int,
-    agente: str,
-    grupo_meta: str,
-    configuracion_metas: dict,
-    configuracion_incentivos: dict,
-    tipos_servicio: list[str] | set[str] | None = None,
-) -> dict:
-    """
-    Calcula la comisión oficial del agente.
-
-    IMPORTANTE:
-    La comisión SIEMPRE usa TODOS los servicios,
-    independientemente del filtro visual del dashboard.
-    """
-
-    meta = obtener_meta_mensual(
-        configuracion_metas=
-            configuracion_metas,
-        grupo=
-            grupo_meta,
-        filtro_servicio=
-            "TODOS",
-        mes=
-            mes,
-    )
-
-    incentivo_base = (
-        configuracion_incentivos
-        .get(
-            grupo_meta,
-            {},
-        )
-        .get(
-            mes
-        )
-    )
-
-    if (
-        meta is None
-        or incentivo_base is None
-    ):
-
-        return {
-            "meta":
-                meta,
-
-            "resultado":
-                None,
-
-            "cumplimiento_pct":
-                None,
-
-            "factor_incentivo_pct":
-                None,
-
-            "incentivo_base":
-                incentivo_base,
-
-            "comision":
-                None,
-        }
-
-    base = filtrar_detalle_scorecard(
-        detalle=detalle,
-        filtro_servicio="TODOS",
-        persona=agente,
-        tipos_servicio=tipos_servicio,
-    ).copy()
-
-    base[
-        "_fecha_cita"
-    ] = pd.to_datetime(
-        base[
-            "fecha_cita"
-        ],
-        errors="coerce",
-    )
-
-    base = base.loc[
-        base[
-            "_fecha_cita"
-        ].dt.year.eq(
-            anio
-        )
-        &
-        base[
-            "_fecha_cita"
-        ].dt.month.eq(
-            mes
-        )
-    ].copy()
-
-    resultado = int(
-        base.loc[
-            base[
-                "es_efectiva"
-            ],
-            "id_cita",
-        ].nunique()
-    )
-
-    cumplimiento = (
-        resultado
-        /
-        meta
-        if meta
-        else 0.0
-    )
-
-    umbrales = [
-        0.50,
-        0.60,
-        0.70,
-        0.80,
-        0.90,
-        0.95,
-        1.00,
-        1.50,
-    ]
-
-
-    siguiente_umbral = next(
-        (
-            umbral
-            for umbral in umbrales
-            if cumplimiento
-            <
-            umbral
-        ),
-        None,
-    )
-
-
-    if siguiente_umbral is None:
-
-        faltantes_siguiente_tramo = 0
-
-    else:
-
-        resultado_necesario = math.ceil(
-            meta
-            *
-            siguiente_umbral
-        )
-
-        faltantes_siguiente_tramo = max(
-            0,
-            resultado_necesario
-            -
-            resultado,
-        )
-
-    # ========================================================
-    # ESCALA DE INCENTIVO
-    # ========================================================
-
-    if cumplimiento < 0.50:
-
-        factor = 0.00
-
-    elif cumplimiento < 0.60:
-
-        factor = 0.50
-
-    elif cumplimiento < 0.70:
-
-        factor = 0.60
-
-    elif cumplimiento < 0.80:
-
-        factor = 0.70
-
-    elif cumplimiento < 0.90:
-
-        factor = 0.80
-
-    elif cumplimiento < 0.95:
-
-        factor = 0.90
-
-    elif cumplimiento <= 1.00:
-
-        factor = 1.00
-
-    else:
-
-        factor = min(
-            cumplimiento,
-            1.50,
-        )
-
-    comision = (
-        float(
-            incentivo_base
-        )
-        *
-        factor
-    )
-
-
-
-    return {
-        "meta":
-            int(
-                meta
-            ),
-
-        "resultado":
-            resultado,
-
-        "cumplimiento_pct":
-            round(
-                cumplimiento
-                *
-                100,
-                1,
-            ),
-
-        "factor_incentivo_pct":
-            round(
-                factor
-                *
-                100,
-                1,
-            ),
-
-        "incentivo_base":
-            float(
-                incentivo_base
-            ),
-
-        "comision":
-            round(
-                comision,
-                2,
-            ),
-
-        "siguiente_umbral_pct":
-            (
-                round(
-                    siguiente_umbral
-                    *
-                    100,
-                    1,
-                )
-                if siguiente_umbral
-                is not None
-                else None
-            ),
-
-        "faltantes_siguiente_tramo":
-            faltantes_siguiente_tramo,
-    }
-
-# ============================================================
-# SEMÁFORO
-# ============================================================
-
-UMBRAL_VERDE = 1.00
-UMBRAL_AMARILLO = 0.90
-
-
-def filtrar_detalle_scorecard(
-    detalle: pd.DataFrame,
-    filtro_servicio: str = "TODOS",
-    persona: str | None = None,
-    excluir_personas: list[str] | None = None,
-    tipos_servicio: list[str] | set[str] | None = None,
-) -> pd.DataFrame:
-    """
-    Aplica las dos capas de filtros.
-
-    Capa 1:
-        TODOS / PREVENTIVO / NO_PREVENTIVO
-
-    Capa 2:
-        tipos concretos de servicio que deben contabilizarse.
-    """
-
-    filtro_servicio = (
-        str(
-            filtro_servicio
-        )
-        .strip()
-        .upper()
-    )
-
-    if filtro_servicio not in {
-        "TODOS",
-        "PREVENTIVO",
-        "NO_PREVENTIVO",
-    }:
-
-        raise ValueError(
-            f"Filtro no válido: {filtro_servicio}"
-        )
-
-    resultado = detalle.copy()
-
-    # ========================================================
-    # CLASIFICACIÓN DETALLADA
-    # ========================================================
-
-    resultado[
-        "_tipo_servicio"
-    ] = resultado[
-        "motivos"
-    ].apply(
-        lambda motivo:
-            clasificar_servicio(
-                motivo
-            )[1]
-    )
-
-    # ========================================================
-    # CAPA 1 — GRUPO
-    # ========================================================
-
-    if filtro_servicio != "TODOS":
-
-        resultado = resultado.loc[
-            resultado[
-                "grupo_servicio"
-            ].eq(
-                filtro_servicio
-            )
-        ].copy()
-
-    # ========================================================
-    # CAPA 2 — TIPO CONCRETO
-    # ========================================================
-
-    if tipos_servicio is not None:
-
-        tipos_servicio = set(
-            tipos_servicio
-        )
-
-        resultado = resultado.loc[
-            resultado[
-                "_tipo_servicio"
-            ].isin(
-                tipos_servicio
-            )
-        ].copy()
-
-    # ========================================================
-    # PERSONA
-    # ========================================================
-
-    if persona is not None:
-
-        resultado = resultado.loc[
-            resultado[
-                "persona_creditada"
-            ].eq(
-                persona
-            )
-        ].copy()
-
-    if excluir_personas:
-
-        resultado = resultado.loc[
-            ~resultado[
-                "persona_creditada"
-            ].isin(
-                excluir_personas
-            )
-        ].copy()
-
-    return resultado
-
-
-def obtener_meta_mensual(
-    configuracion_metas: dict,
-    grupo: str,
-    filtro_servicio: str,
-    mes: int,
-):
-    """
-    Devuelve la meta correspondiente al grupo, filtro y mes.
-
-    TODOS:
-        Preventivo + No Preventivo.
-
-    Si alguna de las dos metas necesarias para TODOS no está
-    configurada, devuelve None para evitar mostrar una meta
-    parcial como si fuera total.
-    """
-
-    grupo = str(
-        grupo
-    ).upper()
-
-    filtro_servicio = str(
-        filtro_servicio
-    ).upper()
-
-    config_grupo = configuracion_metas.get(
-        grupo,
-        {},
-    )
-
-    preventivo = config_grupo.get(
-        "PREVENTIVO",
-        {},
-    ).get(
-        mes
-    )
-
-    no_preventivo = config_grupo.get(
-        "NO_PREVENTIVO",
-        {},
-    ).get(
-        mes
-    )
-
-    if filtro_servicio == "PREVENTIVO":
-        return preventivo
-
-    if filtro_servicio == "NO_PREVENTIVO":
-        return no_preventivo
-
-    if filtro_servicio == "TODOS":
-
-        if (
-            preventivo is None
-            or no_preventivo is None
-        ):
-            return None
-
-        return (
-            preventivo
-            +
-            no_preventivo
-        )
-
-    raise ValueError(
-        f"Filtro no reconocido: {filtro_servicio}"
-    )
-
-
-def calcular_indicadores_periodo(
-    detalle: pd.DataFrame,
-) -> dict:
-    """
-    Calcula indicadores básicos sobre un subconjunto
-    previamente filtrado.
-    """
-
-    agendadas = int(
-        detalle[
-            "id_cita"
-        ].nunique()
-    )
-
-    efectivas = int(
-        detalle.loc[
-            detalle[
-                "es_efectiva"
-            ],
-            "id_cita",
-        ].nunique()
-    )
-
-    nivel_1 = int(
-        detalle[
-            "nivel"
-        ].eq(
-            "N1"
-        ).sum()
-    )
-
-    nivel_2 = int(
-        detalle[
-            "nivel"
-        ].eq(
-            "N2"
-        ).sum()
-    )
-
-    nivel_3 = int(
-        detalle[
-            "nivel"
-        ].eq(
-            "N3"
-        ).sum()
-    )
-
-    porcentaje = (
-        efectivas
-        /
-        agendadas
-        *
-        100
-        if agendadas
-        else 0.0
-    )
-
-    return {
-        "cita_agendada":
-            agendadas,
-
-        "cita_efectiva":
-            efectivas,
-
-        "n1":
-            nivel_1,
-
-        "n2":
-            nivel_2,
-
-        "n3":
-            nivel_3,
-
-        "efectividad_pct":
-            round(
-                porcentaje,
-                1,
-            ),
-    }
-
-
-def construir_scorecard_mensual(
-    detalle: pd.DataFrame,
-    anio: int,
-    grupo_meta: str,
-    configuracion_metas: dict,
-    filtro_servicio: str = "TODOS",
-    persona: str | None = None,
-    excluir_personas: list[str] | None = None,
-    tipos_servicio: list[str] | set[str] | None = None,
-) -> pd.DataFrame:
-    """
-    Construye la matriz mensual enero-diciembre.
-
-    Indicadores:
-    - Meta
-    - cita agendada
-    - cita efectiva
-    - % efectividad
-    - % cumplimiento de meta
-    - N1
-    - N2
-    - N3
-
-    % efectividad:
-        cita efectiva / cita agendada
-
-    % cumplimiento de meta:
-        cita efectiva / meta
-    """
-
-    base = filtrar_detalle_scorecard(
-        detalle=detalle,
-        filtro_servicio=filtro_servicio,
-        persona=persona,
-        excluir_personas=excluir_personas,
-        tipos_servicio=tipos_servicio,
-    ).copy()
-
-    base["_fecha_cita"] = pd.to_datetime(
-        base["fecha_cita"],
-        errors="coerce",
-    )
-
-    base = base.loc[
-        base["_fecha_cita"].dt.year.eq(anio)
-    ].copy()
-
-    filas = [
-        "Meta",
-        "cita agendada",
-        "cita efectiva",
-        "% efectividad",
-        "% cumplimiento de meta",
-        "N1",
-        "N2",
-        "N3",
-    ]
-
-    resultado = pd.DataFrame(
-        index=filas,
-        columns=list(MESES.values()),
-        dtype="object",
-    )
-
-    for numero_mes, nombre_mes in MESES.items():
-
-        detalle_mes = base.loc[
-            base["_fecha_cita"].dt.month.eq(
-                numero_mes
-            )
-        ].copy()
-
-        indicadores = calcular_indicadores_periodo(
-            detalle_mes
-        )
-
-        meta = obtener_meta_mensual(
-            configuracion_metas=
-                configuracion_metas,
-            grupo=
-                grupo_meta,
-            filtro_servicio=
-                filtro_servicio,
-            mes=
-                numero_mes,
-        )
-
-        efectivas = indicadores[
-            "cita_efectiva"
-        ]
-
-        if meta is None:
-            cumplimiento_meta = pd.NA
-
-        elif meta == 0:
-            cumplimiento_meta = 0.0
-
-        else:
-            cumplimiento_meta = round(
-                efectivas
-                /
-                meta
-                *
-                100,
-                1,
-            )
-
-        resultado.loc[
-            "Meta",
-            nombre_mes,
-        ] = (
-            meta
-            if meta is not None
-            else pd.NA
-        )
-
-        resultado.loc[
-            "cita agendada",
-            nombre_mes,
-        ] = indicadores[
-            "cita_agendada"
-        ]
-
-        resultado.loc[
-            "cita efectiva",
-            nombre_mes,
-        ] = efectivas
-
-        resultado.loc[
-            "% efectividad",
-            nombre_mes,
-        ] = indicadores[
-            "efectividad_pct"
-        ]
-
-        resultado.loc[
-            "% cumplimiento de meta",
-            nombre_mes,
-        ] = cumplimiento_meta
-
-        resultado.loc[
-            "N1",
-            nombre_mes,
-        ] = indicadores[
-            "n1"
-        ]
-
-        resultado.loc[
-            "N2",
-            nombre_mes,
-        ] = indicadores[
-            "n2"
-        ]
-
-        resultado.loc[
-            "N3",
-            nombre_mes,
-        ] = indicadores[
-            "n3"
-        ]
-
-    resultado.index.name = (
-        "Nivel mensual"
-    )
-
-    return resultado
-
 
 def construir_avance_al_dia(
     detalle: pd.DataFrame,
@@ -2179,18 +2121,12 @@ def construir_avance_al_dia(
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
-    feriados: set | list | tuple | None = None,
     tipos_servicio: list[str] | set[str] | None = None,
+    feriados: set | list | tuple | None = None,
 ) -> dict:
     """
-    Calcula el avance acumulado contra la meta diaria
-    ponderada.
-
-    La meta acumulada respeta:
-    - lunes-viernes = 1
-    - sábado = 0.5
-    - domingo = 0
-    - feriado = 0
+    Compara las efectivas acumuladas con la meta acumulada
+    según la distribución laboral real.
     """
 
     fecha_corte = pd.Timestamp(
@@ -2225,6 +2161,12 @@ def construir_avance_al_dia(
         errors="coerce",
     ).dt.date
 
+    inicio_mes = pd.Timestamp(
+        year=fecha_corte.year,
+        month=fecha_corte.month,
+        day=1,
+    ).date()
+
     efectivas = int(
         base.loc[
             base[
@@ -2234,13 +2176,7 @@ def construir_avance_al_dia(
             base[
                 "_fecha_cita"
             ].ge(
-                pd.Timestamp(
-                    year=
-                        fecha_corte.year,
-                    month=
-                        fecha_corte.month,
-                    day=1,
-                ).date()
+                inicio_mes
             )
             &
             base[
@@ -2277,17 +2213,11 @@ def construir_avance_al_dia(
                 "⚪ Meta no configurada",
         }
 
-    distribucion = (
-        construir_distribucion_meta_diaria(
-            anio=
-                fecha_corte.year,
-            mes=
-                fecha_corte.month,
-            meta_mensual=
-                meta_mensual,
-            feriados=
-                feriados,
-        )
+    distribucion = construir_distribucion_meta_diaria(
+        anio=fecha_corte.year,
+        mes=fecha_corte.month,
+        meta_mensual=meta_mensual,
+        feriados=feriados,
     )
 
     meta_al_dia = int(
@@ -2317,21 +2247,31 @@ def construir_avance_al_dia(
         else 0.0
     )
 
-    cumplimiento = (
+    cumplimiento_pct = (
         efectivas
         /
         meta_al_dia
+        *
+        100
         if meta_al_dia
         else 0.0
     )
 
-    if cumplimiento >= UMBRAL_VERDE:
+    if (
+        cumplimiento_pct
+        >=
+        UMBRAL_CUMPLIMIENTO_VERDE
+    ):
 
         estado = (
             "🟢 En meta / adelantado"
         )
 
-    elif cumplimiento >= UMBRAL_AMARILLO:
+    elif (
+        cumplimiento_pct
+        >=
+        UMBRAL_CUMPLIMIENTO_AMARILLO
+    ):
 
         estado = (
             "🟡 Ligeramente atrasado"
@@ -2356,7 +2296,9 @@ def construir_avance_al_dia(
             efectivas,
 
         "diferencia":
-            diferencia,
+            int(
+                diferencia
+            ),
 
         "diferencia_pct":
             round(
@@ -2366,9 +2308,7 @@ def construir_avance_al_dia(
 
         "cumplimiento_pct":
             round(
-                cumplimiento
-                *
-                100,
+                cumplimiento_pct,
                 1,
             ),
 
@@ -2376,6 +2316,10 @@ def construir_avance_al_dia(
             estado,
     }
 
+
+# ============================================================
+# EVOLUCIÓN ACUMULADA
+# ============================================================
 
 def construir_evolucion_acumulada(
     detalle: pd.DataFrame,
@@ -2385,17 +2329,11 @@ def construir_evolucion_acumulada(
     filtro_servicio: str = "TODOS",
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
-    feriados: set | list | tuple | None = None,
     tipos_servicio: list[str] | set[str] | None = None,
+    feriados: set | list | tuple | None = None,
 ) -> pd.DataFrame:
     """
-    Construye la evolución acumulada real del mes.
-
-    Meta:
-        acumulación de la meta diaria ponderada.
-
-    Efectivas:
-        acumulación de citas efectivas según fecha de cita.
+    Meta acumulada vs citas efectivas acumuladas.
     """
 
     fecha_corte = pd.Timestamp(
@@ -2414,20 +2352,13 @@ def construir_evolucion_acumulada(
     )
 
     if meta_mensual is None:
-
         return pd.DataFrame()
 
-    distribucion = (
-        construir_distribucion_meta_diaria(
-            anio=
-                fecha_corte.year,
-            mes=
-                fecha_corte.month,
-            meta_mensual=
-                meta_mensual,
-            feriados=
-                feriados,
-        )
+    distribucion = construir_distribucion_meta_diaria(
+        anio=fecha_corte.year,
+        mes=fecha_corte.month,
+        meta_mensual=meta_mensual,
+        feriados=feriados,
     )
 
     base = filtrar_detalle_scorecard(
@@ -2490,14 +2421,15 @@ def construir_evolucion_acumulada(
 
     evolucion[
         "efectivas_dia"
-    ] = evolucion[
-        "fecha"
-    ].map(
-        por_dia
-    ).fillna(
-        0
-    ).astype(
-        int
+    ] = (
+        evolucion[
+            "fecha"
+        ]
+        .map(
+            por_dia
+        )
+        .fillna(0)
+        .astype(int)
     )
 
     evolucion[
@@ -2524,6 +2456,300 @@ def construir_evolucion_acumulada(
     ]
 
 
+# ============================================================
+# COMISIÓN
+# ============================================================
+
+def calcular_comision_agente(
+    detalle: pd.DataFrame,
+    anio: int,
+    mes: int,
+    agente: str,
+    grupo_meta: str,
+    configuracion_metas: dict,
+    configuracion_incentivos: dict,
+    tipos_servicio_comision:
+        list[str] | set[str] | None = None,
+) -> dict:
+    """
+    Calcula la comisión oficial.
+
+    REGLA:
+    la comisión SIEMPRE usa filtro TODOS.
+
+    La segunda capa de tipos de servicio sí puede excluir
+    categorías que Gerencia determine que no deben pagar.
+    """
+
+    meta = obtener_meta_mensual(
+        configuracion_metas=
+            configuracion_metas,
+        grupo=
+            grupo_meta,
+        filtro_servicio=
+            "TODOS",
+        mes=
+            mes,
+    )
+
+    incentivo_base = (
+        configuracion_incentivos
+        .get(
+            grupo_meta,
+            {},
+        )
+        .get(
+            mes
+        )
+    )
+
+    if (
+        meta is None
+        or incentivo_base is None
+    ):
+
+        return {
+            "meta":
+                meta,
+
+            "resultado":
+                None,
+
+            "cumplimiento_pct":
+                None,
+
+            "factor_incentivo_pct":
+                None,
+
+            "incentivo_base":
+                incentivo_base,
+
+            "comision":
+                None,
+
+            "siguiente_umbral_pct":
+                None,
+
+            "faltantes_siguiente_tramo":
+                None,
+        }
+
+    base = filtrar_detalle_scorecard(
+        detalle=detalle,
+        filtro_servicio="TODOS",
+        persona=agente,
+        tipos_servicio=
+            tipos_servicio_comision,
+    ).copy()
+
+    base[
+        "_fecha_cita"
+    ] = pd.to_datetime(
+        base[
+            "fecha_cita"
+        ],
+        errors="coerce",
+    )
+
+    base = base.loc[
+        base[
+            "_fecha_cita"
+        ].dt.year.eq(
+            anio
+        )
+        &
+        base[
+            "_fecha_cita"
+        ].dt.month.eq(
+            mes
+        )
+    ].copy()
+
+    resultado = int(
+        base.loc[
+            base[
+                "es_efectiva"
+            ],
+            "id_cita",
+        ].nunique()
+    )
+
+    cumplimiento = (
+        resultado
+        /
+        meta
+        if meta
+        else 0.0
+    )
+
+    # ========================================================
+    # FACTOR DE INCENTIVO
+    # ========================================================
+
+    if cumplimiento < 0.50:
+
+        factor = 0.00
+
+    elif cumplimiento < 0.60:
+
+        factor = 0.50
+
+    elif cumplimiento < 0.70:
+
+        factor = 0.60
+
+    elif cumplimiento < 0.80:
+
+        factor = 0.70
+
+    elif cumplimiento < 0.90:
+
+        factor = 0.80
+
+    elif cumplimiento < 0.95:
+
+        factor = 0.90
+
+    elif cumplimiento <= 1.00:
+
+        factor = 1.00
+
+    else:
+
+        factor = min(
+            cumplimiento,
+            1.50,
+        )
+
+    comision = (
+        float(
+            incentivo_base
+        )
+        *
+        factor
+    )
+
+    # ========================================================
+    # SIGUIENTE NIVEL
+    # ========================================================
+
+    if cumplimiento < 0.50:
+
+        siguiente_umbral = 0.50
+
+    elif cumplimiento < 0.60:
+
+        siguiente_umbral = 0.60
+
+    elif cumplimiento < 0.70:
+
+        siguiente_umbral = 0.70
+
+    elif cumplimiento < 0.80:
+
+        siguiente_umbral = 0.80
+
+    elif cumplimiento < 0.90:
+
+        siguiente_umbral = 0.90
+
+    elif cumplimiento < 0.95:
+
+        siguiente_umbral = 0.95
+
+    elif cumplimiento < 1.00:
+
+        siguiente_umbral = 1.00
+
+    elif cumplimiento < 1.50:
+
+        # Por encima de 100% el incentivo crece de forma
+        # continua. El siguiente límite estructural es 150%.
+        siguiente_umbral = 1.50
+
+    else:
+
+        siguiente_umbral = None
+
+    if siguiente_umbral is None:
+
+        faltantes = 0
+
+    else:
+
+        resultado_objetivo = math.ceil(
+            meta
+            *
+            siguiente_umbral
+        )
+
+        faltantes = max(
+            0,
+            resultado_objetivo
+            -
+            resultado,
+        )
+
+    return {
+        "meta":
+            int(
+                meta
+            ),
+
+        "resultado":
+            resultado,
+
+        "cumplimiento_pct":
+            round(
+                cumplimiento
+                *
+                100,
+                1,
+            ),
+
+        "factor_incentivo_pct":
+            round(
+                factor
+                *
+                100,
+                1,
+            ),
+
+        "incentivo_base":
+            float(
+                incentivo_base
+            ),
+
+        "comision":
+            round(
+                comision,
+                2,
+            ),
+
+        "siguiente_umbral_pct":
+            (
+                round(
+                    siguiente_umbral
+                    *
+                    100,
+                    1,
+                )
+                if siguiente_umbral
+                is not None
+                else None
+            ),
+
+        "faltantes_siguiente_tramo":
+            int(
+                faltantes
+            ),
+    }
+
+
+# ============================================================
+# BLOQUE COMPLETO
+# ============================================================
+
 def construir_bloque_scorecard(
     detalle: pd.DataFrame,
     anio: int,
@@ -2534,10 +2760,10 @@ def construir_bloque_scorecard(
     persona: str | None = None,
     excluir_personas: list[str] | None = None,
     tipos_servicio: list[str] | set[str] | None = None,
+    feriados: set | list | tuple | None = None,
 ) -> dict:
     """
-    Construye todo lo necesario para una sección:
-    mensual + avance + evolución.
+    Construye mensual + avance + evolución para una sección.
     """
 
     return {
@@ -2550,40 +2776,61 @@ def construir_bloque_scorecard(
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
-                persona=persona,
+                persona=
+                    persona,
                 excluir_personas=
                     excluir_personas,
+                tipos_servicio=
+                    tipos_servicio,
             ),
 
         "avance":
             construir_avance_al_dia(
                 detalle=detalle,
-                fecha_corte=fecha_corte,
-                grupo_meta=grupo_meta,
+                fecha_corte=
+                    fecha_corte,
+                grupo_meta=
+                    grupo_meta,
                 configuracion_metas=
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
-                persona=persona,
+                persona=
+                    persona,
                 excluir_personas=
                     excluir_personas,
+                tipos_servicio=
+                    tipos_servicio,
+                feriados=
+                    feriados,
             ),
 
         "evolucion":
             construir_evolucion_acumulada(
                 detalle=detalle,
-                fecha_corte=fecha_corte,
-                grupo_meta=grupo_meta,
+                fecha_corte=
+                    fecha_corte,
+                grupo_meta=
+                    grupo_meta,
                 configuracion_metas=
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
-                persona=persona,
+                persona=
+                    persona,
                 excluir_personas=
                     excluir_personas,
+                tipos_servicio=
+                    tipos_servicio,
+                feriados=
+                    feriados,
             ),
     }
 
+
+# ============================================================
+# SCORECARDS OPERATIVOS
+# ============================================================
 
 def construir_scorecards_operativos(
     detalle: pd.DataFrame,
@@ -2594,14 +2841,15 @@ def construir_scorecards_operativos(
     filtro_servicio: str = "TODOS",
     configuracion_metas: dict | None = None,
     tipos_servicio: list[str] | set[str] | None = None,
+    feriados: set | list | tuple | None = None,
 ) -> dict:
     """
-    Construye los cuatro bloques del reporte:
+    Construye:
 
-        General
-        Rocío
-        Brenda
-        Otros agentes
+    - General
+    - Rocío
+    - Brenda
+    - Otros agentes
     """
 
     if configuracion_metas is None:
@@ -2620,56 +2868,77 @@ def construir_scorecards_operativos(
             construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                fecha_corte=fecha_corte,
-                grupo_meta="GENERAL",
+                fecha_corte=
+                    fecha_corte,
+                grupo_meta=
+                    "GENERAL",
                 configuracion_metas=
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
+                tipos_servicio=
+                    tipos_servicio,
+                feriados=
+                    feriados,
             ),
 
         "rocio":
             construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                fecha_corte=fecha_corte,
-                grupo_meta="ROCIO",
+                fecha_corte=
+                    fecha_corte,
+                grupo_meta=
+                    "ROCIO",
                 configuracion_metas=
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
-                persona=agente_a,
+                persona=
+                    agente_a,
+                tipos_servicio=
+                    tipos_servicio,
+                feriados=
+                    feriados,
             ),
 
         "brenda":
             construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                fecha_corte=fecha_corte,
-                grupo_meta="BRENDA",
+                fecha_corte=
+                    fecha_corte,
+                grupo_meta=
+                    "BRENDA",
                 configuracion_metas=
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
-                persona=agente_b,
+                persona=
+                    agente_b,
+                tipos_servicio=
+                    tipos_servicio,
+                feriados=
+                    feriados,
             ),
 
         "otros":
             construir_bloque_scorecard(
                 detalle=detalle,
                 anio=anio,
-                fecha_corte=fecha_corte,
-                grupo_meta="OTROS",
+                fecha_corte=
+                    fecha_corte,
+                grupo_meta=
+                    "OTROS",
                 configuracion_metas=
                     configuracion_metas,
                 filtro_servicio=
                     filtro_servicio,
                 excluir_personas=
                     principales,
+                tipos_servicio=
+                    tipos_servicio,
+                feriados=
+                    feriados,
             ),
     }
-
-
-
-
-

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import calendar
 from datetime import date
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import calendar
+
 from database import (
     inicializar_base,
     cargar_detalle_efectividad,
@@ -20,12 +21,14 @@ from efectividad_reportes import (
     construir_scorecards_operativos,
     construir_scorecard_diario,
     calcular_comision_agente,
+    filtrar_detalle_scorecard,
     CONFIG_METAS_2026,
     CONFIG_INCENTIVOS_2026,
 )
 
+
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN GENERAL
 # ============================================================
 
 st.set_page_config(
@@ -35,12 +38,38 @@ st.set_page_config(
 )
 
 
-AGENTE_ROCIO = (
-    "Rocio Miranda Ausejo"
-)
+AGENTE_ROCIO = "Rocio Miranda Ausejo"
+AGENTE_BRENDA = "Brenda Montalvan Cornejo"
 
-AGENTE_BRENDA = (
-    "Brenda Montalvan Cornejo"
+
+# ============================================================
+# CATÁLOGO VISUAL DE SERVICIOS
+#
+# El primer valor es lo que ve el usuario.
+# El segundo es el valor técnico utilizado por
+# clasificar_servicio().
+# ============================================================
+
+TIPOS_POR_GRUPO = {
+    "PREVENTIVO": [
+        ("Preventivo", "Preventivo"),
+        ("01K", "01K"),
+    ],
+
+    "NO_PREVENTIVO": [
+        ("Correctivo", "Correctivo"),
+        ("P&P", "PYP"),
+        ("Diagnóstico", "Diagnóstico"),
+        ("Garantía", "Garantía"),
+        ("Indeterminado", "INDETERMINADO"),
+    ],
+}
+
+
+TODOS_TIPOS = (
+    TIPOS_POR_GRUPO["PREVENTIVO"]
+    +
+    TIPOS_POR_GRUPO["NO_PREVENTIVO"]
 )
 
 
@@ -57,6 +86,9 @@ inicializar_base()
 def cargar_efectividad(
     anio: int,
 ) -> pd.DataFrame:
+    """
+    Carga el detalle persistido de efectividad.
+    """
 
     return cargar_detalle_efectividad(
         anio=anio
@@ -64,238 +96,19 @@ def cargar_efectividad(
 
 
 # ============================================================
-# AVANCE
+# FORMATO Y SEMÁFOROS
 # ============================================================
 
-def mostrar_avance(
-    avance: dict,
-) -> None:
-    """
-    Muestra un resumen compacto del avance mensual.
-
-    Diseñado para ocupar poco espacio vertical en la
-    columna derecha del scorecard.
-    """
-
-    meta_mensual = avance[
-        "meta_mensual"
-    ]
-
-    meta_al_dia = avance[
-        "meta_al_dia"
-    ]
-
-    efectivas = avance[
-        "efectivas_al_dia"
-    ]
-
-    diferencia = avance[
-        "diferencia"
-    ]
-
-    diferencia_pct = avance[
-        "diferencia_pct"
-    ]
-
-    estado = avance[
-        "estado"
-    ]
-
-    if meta_mensual is None:
-
-        st.info(
-            "Meta no configurada."
-        )
-
-        st.metric(
-            "Efectivas al corte",
-            f"{efectivas:,}",
-        )
-
-        return
-
-    # ========================================================
-    # FILA 1 — META Y META ESPERADA
-    # ========================================================
-
-    col_meta, col_esperada = st.columns(
-        2,
-        gap="small",
-    )
-
-    with col_meta:
-
-        st.metric(
-            "Meta mensual",
-            f"{meta_mensual:,}",
-        )
-
-    with col_esperada:
-
-        st.metric(
-            "Meta al corte",
-            f"{meta_al_dia:,}",
-        )
-
-    # ========================================================
-    # FILA 2 — REAL Y BRECHA
-    # ========================================================
-
-    col_real, col_brecha = st.columns(
-        2,
-        gap="small",
-    )
-
-    with col_real:
-
-        st.metric(
-            "Efectivas",
-            f"{efectivas:,}",
-            delta=(
-                f"{diferencia:+,} citas"
-            ),
-        )
-
-    with col_brecha:
-
-        st.metric(
-            "Brecha",
-            f"{diferencia_pct:+.1f}%",
-        )
-
-    # ========================================================
-    # SEMÁFORO
-    # ========================================================
-
-    st.markdown(
-        f"**{estado}**"
-    )
-
-
-# ============================================================
-# EVOLUCIÓN
-# ============================================================
-
-def mostrar_grafico_evolucion(
-    evolucion: pd.DataFrame,
-) -> None:
-    """
-    Muestra una versión compacta de la evolución acumulada,
-    pensada para la columna lateral del scorecard.
-    """
-
-    if evolucion.empty:
-
-        st.caption(
-            "Sin meta para mostrar tendencia."
-        )
-
-        return
-
-    figura = go.Figure()
-
-    figura.add_trace(
-        go.Scatter(
-            x=evolucion[
-                "fecha"
-            ],
-            y=evolucion[
-                "meta_acumulada"
-            ],
-            mode="lines",
-            name="Meta",
-            line=dict(
-                dash="dot",
-                width=2,
-            ),
-        )
-    )
-
-    figura.add_trace(
-        go.Scatter(
-            x=evolucion[
-                "fecha"
-            ],
-            y=evolucion[
-                "efectivas_acumuladas"
-            ],
-            mode="lines",
-            name="Efectivas",
-            line=dict(
-                width=2,
-            ),
-        )
-    )
-
-    figura.update_layout(
-        height=175,
-
-        hovermode="x unified",
-
-        margin=dict(
-            l=0,
-            r=0,
-            t=5,
-            b=0,
-        ),
-
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.01,
-            xanchor="left",
-            x=0,
-            font=dict(
-                size=10,
-            ),
-        ),
-
-        plot_bgcolor=(
-            "rgba(0,0,0,0)"
-        ),
-
-        paper_bgcolor=(
-            "rgba(0,0,0,0)"
-        ),
-
-        xaxis=dict(
-            title="",
-            showgrid=False,
-            tickformat="%d/%m",
-            nticks=5,
-            tickfont=dict(
-                size=9,
-            ),
-        ),
-
-        yaxis=dict(
-            title="",
-            showgrid=True,
-            nticks=4,
-            tickfont=dict(
-                size=9,
-            ),
-        ),
-    )
-
-    st.plotly_chart(
-        figura,
-        use_container_width=True,
-        config={
-            "displayModeBar": False,
-        },
-    )
-
-
-# ============================================================
-# SCORECARD VISUAL
-# ============================================================
 def estilizar_tabla_efectividad(
     tabla: pd.DataFrame,
 ):
     """
-    Formatea cantidades y porcentajes y aplica
-    semáforos a las filas porcentuales.
+    Aplica formato consistente:
+
+    - cantidades sin decimales;
+    - porcentajes con un decimal;
+    - semáforo para % efectividad;
+    - semáforo para % cumplimiento de meta.
     """
 
     styler = tabla.style
@@ -344,64 +157,79 @@ def estilizar_tabla_efectividad(
             na_rep="",
         )
 
+    # --------------------------------------------------------
+    # % EFECTIVIDAD
+    #
+    # Criterio preliminar:
+    # >= 90 verde
+    # >= 80 amarillo
+    # < 80 rojo
+    # --------------------------------------------------------
+
     def color_efectividad(
         valor,
-    ):
+    ) -> str:
 
-        if pd.isna(
-            valor
-        ):
+        if pd.isna(valor):
             return ""
 
-        valor = float(
-            valor
-        )
+        valor = float(valor)
 
         if valor >= 90:
             return (
                 "background-color: #d9ead3;"
                 "color: #274e13;"
+                "font-weight: 600;"
             )
 
         if valor >= 80:
             return (
                 "background-color: #fff2cc;"
                 "color: #7f6000;"
+                "font-weight: 600;"
             )
 
         return (
             "background-color: #f4cccc;"
             "color: #990000;"
+            "font-weight: 600;"
         )
+
+    # --------------------------------------------------------
+    # % CUMPLIMIENTO
+    #
+    # >= 100 verde
+    # >= 90 amarillo
+    # < 90 rojo
+    # --------------------------------------------------------
 
     def color_cumplimiento(
         valor,
-    ):
+    ) -> str:
 
-        if pd.isna(
-            valor
-        ):
+        if pd.isna(valor):
             return ""
 
-        valor = float(
-            valor
-        )
+        valor = float(valor)
 
         if valor >= 100:
             return (
                 "background-color: #d9ead3;"
                 "color: #274e13;"
+                "font-weight: 600;"
             )
 
         if valor >= 90:
             return (
                 "background-color: #fff2cc;"
                 "color: #7f6000;"
+                "font-weight: 600;"
             )
 
         return (
             "background-color: #f4cccc;"
             "color: #990000;"
+            "font-weight: 600;"
         )
 
     if "% efectividad" in tabla.index:
@@ -409,9 +237,7 @@ def estilizar_tabla_efectividad(
         styler = styler.map(
             color_efectividad,
             subset=pd.IndexSlice[
-                [
-                    "% efectividad"
-                ],
+                ["% efectividad"],
                 :
             ],
         )
@@ -424,27 +250,223 @@ def estilizar_tabla_efectividad(
         styler = styler.map(
             color_cumplimiento,
             subset=pd.IndexSlice[
-                [
-                    "% cumplimiento de meta"
-                ],
+                ["% cumplimiento de meta"],
                 :
             ],
         )
 
     return styler
 
+
+# ============================================================
+# AVANCE
+# ============================================================
+
+def mostrar_avance(
+    avance: dict,
+) -> None:
+    """
+    Resumen compacto de avance mensual.
+    """
+
+    meta_mensual = avance[
+        "meta_mensual"
+    ]
+
+    meta_al_dia = avance[
+        "meta_al_dia"
+    ]
+
+    efectivas = avance[
+        "efectivas_al_dia"
+    ]
+
+    diferencia = avance[
+        "diferencia"
+    ]
+
+    diferencia_pct = avance[
+        "diferencia_pct"
+    ]
+
+    estado = avance[
+        "estado"
+    ]
+
+    if meta_mensual is None:
+
+        st.info(
+            "Meta no configurada."
+        )
+
+        st.metric(
+            "Efectivas al corte",
+            f"{efectivas:,}",
+        )
+
+        return
+
+    col_meta, col_esperada = st.columns(
+        2,
+        gap="small",
+    )
+
+    with col_meta:
+
+        st.metric(
+            "Meta mensual",
+            f"{meta_mensual:,}",
+        )
+
+    with col_esperada:
+
+        st.metric(
+            "Meta al corte",
+            f"{meta_al_dia:,}",
+        )
+
+    col_real, col_brecha = st.columns(
+        2,
+        gap="small",
+    )
+
+    with col_real:
+
+        st.metric(
+            "Efectivas",
+            f"{efectivas:,}",
+            delta=(
+                f"{diferencia:+,} citas"
+            ),
+        )
+
+    with col_brecha:
+
+        st.metric(
+            "Brecha",
+            f"{diferencia_pct:+.1f}%",
+        )
+
+    st.markdown(
+        f"**{estado}**"
+    )
+
+
+# ============================================================
+# GRÁFICO DE EVOLUCIÓN
+# ============================================================
+
+def mostrar_grafico_evolucion(
+    evolucion: pd.DataFrame,
+) -> None:
+    """
+    Curva compacta:
+    meta acumulada vs citas efectivas acumuladas.
+    """
+
+    if evolucion.empty:
+
+        st.caption(
+            "Sin meta para mostrar tendencia."
+        )
+
+        return
+
+    figura = go.Figure()
+
+    figura.add_trace(
+        go.Scatter(
+            x=evolucion["fecha"],
+            y=evolucion["meta_acumulada"],
+            mode="lines",
+            name="Meta",
+            line=dict(
+                dash="dot",
+                width=2,
+            ),
+        )
+    )
+
+    figura.add_trace(
+        go.Scatter(
+            x=evolucion["fecha"],
+            y=evolucion[
+                "efectivas_acumuladas"
+            ],
+            mode="lines",
+            name="Efectivas",
+            line=dict(
+                width=2,
+            ),
+        )
+    )
+
+    figura.update_layout(
+        height=175,
+        hovermode="x unified",
+
+        margin=dict(
+            l=0,
+            r=0,
+            t=5,
+            b=0,
+        ),
+
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0,
+            font=dict(
+                size=10,
+            ),
+        ),
+
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+
+        xaxis=dict(
+            title="",
+            showgrid=False,
+            tickformat="%d/%m",
+            nticks=5,
+            tickfont=dict(
+                size=9,
+            ),
+        ),
+
+        yaxis=dict(
+            title="",
+            showgrid=True,
+            nticks=4,
+            tickfont=dict(
+                size=9,
+            ),
+        ),
+    )
+
+    st.plotly_chart(
+        figura,
+        use_container_width=True,
+        config={
+            "displayModeBar": False,
+        },
+    )
+
+
+# ============================================================
+# SCORECARD MENSUAL VISUAL
+# ============================================================
+
 def mostrar_scorecard(
     titulo: str,
     bloque: dict,
 ) -> None:
     """
-    Muestra un bloque compacto de efectividad:
+    Tabla mensual a la izquierda.
 
-    izquierda:
-        tabla mensual.
-
-    derecha:
-        avance del mes + tendencia acumulada.
+    Avance + tendencia a la derecha.
     """
 
     mensual = bloque[
@@ -463,29 +485,25 @@ def mostrar_scorecard(
         f"## {titulo}"
     )
 
-    columna_tabla, columna_control = st.columns(
-        [
-            4.6,
-            1.4,
-        ],
-        gap="large",
+    columna_tabla, columna_control = (
+        st.columns(
+            [
+                4.6,
+                1.4,
+            ],
+            gap="large",
+        )
     )
-
-    # ========================================================
-    # IZQUIERDA — SCORECARD MENSUAL
-    # ========================================================
 
     with columna_tabla:
 
         st.dataframe(
-            estilizar_tabla_efectividad(mensual),
+            estilizar_tabla_efectividad(
+                mensual
+            ),
             use_container_width=True,
-            height=285,
+            height=305,
         )
-
-    # ========================================================
-    # DERECHA — AVANCE + TENDENCIA
-    # ========================================================
 
     with columna_control:
 
@@ -505,12 +523,17 @@ def mostrar_scorecard(
             evolucion
         )
 
+
+# ============================================================
+# SCORECARD DIARIO VISUAL
+# ============================================================
+
 def mostrar_scorecard_diario(
     titulo: str,
     tabla: pd.DataFrame,
 ) -> None:
     """
-    Muestra el seguimiento diario del mes actual.
+    Seguimiento diario del mes actual.
     """
 
     st.markdown(
@@ -525,39 +548,13 @@ def mostrar_scorecard_diario(
 
         return
 
-    def estilo_columna(
-        columna: pd.Series,
-    ):
-        """
-        Domingos en gris claro.
-        """
-
-        if str(
-            columna.name
-        ).endswith(
-            "-dom"
-        ):
-
-            return [
-                "background-color: rgba(128,128,128,0.14)"
-            ] * len(
-                columna
-            )
-
-        return [
-            ""
-        ] * len(
-            columna
-        )
-
-
-
-
-
     styled = estilizar_tabla_efectividad(
         tabla
     )
 
+    # --------------------------------------------------------
+    # DOMINGOS EN GRIS
+    # --------------------------------------------------------
 
     def pintar_domingo(
         columna: pd.Series,
@@ -584,17 +581,10 @@ def mostrar_scorecard_diario(
             columna
         )
 
-
     styled = styled.apply(
         pintar_domingo,
         axis=0,
-    ).apply(
-            estilo_columna,
-            axis=0,
-        ).format(
-            na_rep="",
-        )
-    
+    )
 
     st.dataframe(
         styled,
@@ -602,13 +592,26 @@ def mostrar_scorecard_diario(
         height=235,
     )
 
+
+# ============================================================
+# COMISIÓN
+# ============================================================
+
 def mostrar_comision(
     titulo: str,
     comision: dict,
 ) -> None:
     """
-    Presenta la comisión y permite identificar claramente
-    el tramo actual y el siguiente objetivo.
+    Presenta:
+
+    - objetivo;
+    - resultado;
+    - cumplimiento;
+    - incentivo base;
+    - comisión proyectada;
+    - tramo actual;
+    - siguiente tramo;
+    - efectivas faltantes.
     """
 
     st.markdown(
@@ -631,54 +634,71 @@ def mostrar_comision(
 
         return
 
-    col1, col2, col3 = st.columns(
+    # ========================================================
+    # RESUMEN
+    # ========================================================
+
+    c1, c2, c3 = st.columns(
         3
     )
 
-    col1.metric(
+    c1.metric(
         "Objetivo",
         f"{comision['meta']:,}",
     )
 
-    col2.metric(
+    c2.metric(
         "Resultado",
         f"{comision['resultado']:,}",
     )
 
-    col3.metric(
+    c3.metric(
         "Cumplimiento",
         (
             f"{comision['cumplimiento_pct']:.1f}%"
         ),
     )
 
-    col4, col5 = st.columns(
-        2
+    c4, c5, c6 = st.columns(
+        3
     )
 
-    col4.metric(
-        "Incentivo",
+    c4.metric(
+        "Incentivo base",
         (
             f"S/ "
             f"{comision['incentivo_base']:,.0f}"
         ),
     )
 
-    col5.metric(
-        "Recibido / proyectado",
+    c5.metric(
+        "Factor aplicado",
+        (
+            f"{comision['factor_incentivo_pct']:.1f}%"
+        ),
+    )
+
+    c6.metric(
+        "Comisión proyectada",
         (
             f"S/ "
             f"{comision['comision']:,.0f}"
         ),
     )
 
-    cumplimiento = comision[
-        "cumplimiento_pct"
-    ]
+    # ========================================================
+    # ESCALA
+    # ========================================================
+
+    cumplimiento = float(
+        comision[
+            "cumplimiento_pct"
+        ]
+    )
 
     tramos = pd.DataFrame(
         {
-            "Lím. inf. >=": [
+            "Lím. inf. ≥": [
                 "0%",
                 "50%",
                 "60%",
@@ -713,46 +733,48 @@ def mostrar_comision(
         }
     )
 
-    def es_tramo_actual(
-        indice: int,
-    ) -> bool:
+    # --------------------------------------------------------
+    # IDENTIFICAR FILA ACTUAL
+    # --------------------------------------------------------
 
-        limites = [
-            (0, 50),
-            (50, 60),
-            (60, 70),
-            (70, 80),
-            (80, 90),
-            (90, 95),
-            (95, 100.000001),
-            (100.000001, 150.000001),
-        ]
+    def obtener_indice_tramo() -> int:
 
-        inferior, superior = limites[
-            indice
-        ]
+        if cumplimiento < 50:
+            return 0
 
-        return (
-            cumplimiento
-            >= inferior
-            and
-            cumplimiento
-            <
-            superior
-        )
+        if cumplimiento < 60:
+            return 1
+
+        if cumplimiento < 70:
+            return 2
+
+        if cumplimiento < 80:
+            return 3
+
+        if cumplimiento < 90:
+            return 4
+
+        if cumplimiento < 95:
+            return 5
+
+        if cumplimiento <= 100:
+            return 6
+
+        return 7
+
+    indice_actual = obtener_indice_tramo()
 
     def resaltar_tramo(
         fila: pd.Series,
     ):
 
-        if es_tramo_actual(
-            fila.name
-        ):
+        if fila.name == indice_actual:
 
             return [
                 (
                     "background-color: #d9ead3;"
                     "font-weight: bold;"
+                    "color: #274e13;"
                 )
             ] * len(
                 fila
@@ -764,58 +786,106 @@ def mostrar_comision(
             fila
         )
 
-    st.dataframe(
-        tramos.style.apply(
-            resaltar_tramo,
-            axis=1,
-        ),
-        use_container_width=True,
-        hide_index=True,
+    izquierda, derecha = st.columns(
+        [
+            1.35,
+            1,
+        ],
+        gap="large",
     )
 
-    siguiente = comision[
-        "siguiente_umbral_pct"
-    ]
+    with izquierda:
 
-    faltantes = comision[
-        "faltantes_siguiente_tramo"
-    ]
+        st.dataframe(
+            tramos.style.apply(
+                resaltar_tramo,
+                axis=1,
+            ),
+            use_container_width=True,
+            hide_index=True,
+            height=315,
+        )
 
-    if (
-        siguiente is not None
-        and faltantes > 0
-    ):
+    with derecha:
 
-        st.info(
+        st.markdown(
+            "##### Situación actual"
+        )
+
+        tramo_actual = tramos.iloc[
+            indice_actual
+        ]
+
+        st.write(
             (
-                f"Te faltan **{faltantes:,} "
-                f"citas efectivas** para alcanzar "
-                f"el {siguiente:.0f}%."
+                "**Rango actual:** "
+                f"{tramo_actual['Lím. inf. ≥']} "
+                f"a {tramo_actual['Lím. sup. <']}"
             )
         )
 
-    elif cumplimiento >= 150:
-
-        st.success(
+        st.write(
             (
-                "🏆 Alcanzaste el techo máximo "
-                "de comisión: 150%."
+                "**Incentivo aplicado:** "
+                f"{comision['factor_incentivo_pct']:.1f}%"
             )
         )
 
-    else:
+        siguiente = comision[
+            "siguiente_umbral_pct"
+        ]
 
-        st.success(
-            "✅ Ya alcanzaste el siguiente nivel."
-        )
+        faltantes = comision[
+            "faltantes_siguiente_tramo"
+        ]
+
+        if (
+            siguiente is not None
+            and faltantes is not None
+            and faltantes > 0
+        ):
+
+            st.info(
+                (
+                    f"Te faltan **{faltantes:,} "
+                    "citas efectivas** para alcanzar "
+                    f"el **{siguiente:.0f}%**."
+                )
+            )
+
+        elif cumplimiento >= 150:
+
+            st.success(
+                (
+                    "🏆 Alcanzaste el techo máximo "
+                    "de comisión: **150%**."
+                )
+            )
+
+        elif cumplimiento >= 100:
+
+            st.success(
+                (
+                    "✅ Superaste el 100%. "
+                    "La comisión continúa creciendo "
+                    "hasta un máximo de 150%."
+                )
+            )
+
+        else:
+
+            st.success(
+                "✅ Objetivo del tramo alcanzado."
+            )
 
     st.caption(
         (
-            "La comisión siempre se calcula sobre "
-            "TODOS los grupos de servicio, usando "
-            "únicamente los tipos habilitados."
+            "La comisión siempre utiliza TODOS los grupos "
+            "de servicio, pero respeta los tipos de servicio "
+            "habilitados en la configuración superior."
         )
     )
+
 
 # ============================================================
 # REVISIÓN MANUAL
@@ -829,6 +899,10 @@ def mostrar_revision_manual() -> None:
             "✅ Decisiones guardadas",
         ]
     )
+
+    # ========================================================
+    # PENDIENTES
+    # ========================================================
 
     with tab_pendientes:
 
@@ -984,6 +1058,10 @@ def mostrar_revision_manual() -> None:
 
                         st.rerun()
 
+    # ========================================================
+    # DECISIONES GUARDADAS
+    # ========================================================
+
     with tab_decisiones:
 
         registros = listar_overrides_matching(
@@ -1055,8 +1133,8 @@ st.title(
 st.caption(
     (
         "Seguimiento de citas agendadas, "
-        "efectividad N1 / N2 / N3 y "
-        "cumplimiento de metas."
+        "efectividad N1 / N2 / N3, "
+        "cumplimiento de metas y comisiones."
     )
 )
 
@@ -1113,37 +1191,54 @@ filtro_servicio = MAPA_FILTRO[
 
 
 # ============================================================
-# FILTRO DETALLADO DE SERVICIOS
+# DATOS
 # ============================================================
 
-TIPOS_POR_GRUPO = {
-    "PREVENTIVO": [
-        ("Preventivo", "Preventivo"),
-        ("01K", "01K"),
-    ],
+detalle = cargar_efectividad(
+    anio
+)
 
-    "NO_PREVENTIVO": [
-        ("Correctivo", "Correctivo"),
-        ("P&P", "PYP"),
-        ("Diagnóstico", "Diagnóstico"),
-        ("Garantía", "Garantía"),
-        ("Indeterminado", "INDETERMINADO"),
-    ],
-}
+if detalle.empty:
+
+    st.warning(
+        (
+            "Todavía no existen resultados de "
+            "efectividad para este año."
+        )
+    )
+
+    st.stop()
 
 
-TODOS_TIPOS = (
-    TIPOS_POR_GRUPO[
-        "PREVENTIVO"
-    ]
-    +
-    TIPOS_POR_GRUPO[
-        "NO_PREVENTIVO"
+# ============================================================
+# FECHA DE CORTE
+# ============================================================
+
+ultima_fecha_datos = max(
+    detalle[
+        "fecha_cita"
     ]
 )
 
+fecha_corte = min(
+    date.today(),
+    ultima_fecha_datos,
+)
 
-# Inicializar una sola vez.
+
+st.caption(
+    (
+        f"Fecha de corte: "
+        f"{fecha_corte:%d/%m/%Y}"
+    )
+)
+
+
+# ============================================================
+# SEGUNDA CAPA — TIPOS DE SERVICIO
+# ============================================================
+
+# Inicializar checks una sola vez.
 for _, valor in TODOS_TIPOS:
 
     clave = (
@@ -1181,18 +1276,24 @@ with st.expander(
 
     st.caption(
         (
-            "Estos checks determinan qué tipos de "
-            "servicio participan en los indicadores."
+            "Selecciona qué tipos de servicio participan "
+            "en los indicadores. Esta configuración también "
+            "determina qué servicios cuentan para comisión."
         )
     )
 
-    columnas_check = st.columns(
-        min(
+    numero_columnas = min(
+        max(
             len(
                 opciones_tipo
             ),
-            4,
-        )
+            1,
+        ),
+        4,
+    )
+
+    columnas_check = st.columns(
+        numero_columnas
     )
 
     for posicion, (
@@ -1209,9 +1310,7 @@ with st.expander(
         with columnas_check[
             posicion
             %
-            len(
-                columnas_check
-            )
+            numero_columnas
         ]:
 
             st.checkbox(
@@ -1220,15 +1319,11 @@ with st.expander(
             )
 
 
-tipos_servicio_seleccionados = [
-    valor
-    for _, valor
-    in TODOS_TIPOS
-    if st.session_state[
-        f"cuenta_servicio_{valor}"
-    ]
-]
-
+# ------------------------------------------------------------
+# FILTRO VISUAL
+#
+# Solo considera los tipos pertenecientes al filtro superior.
+# ------------------------------------------------------------
 
 tipos_servicio_visual = [
     valor
@@ -1240,56 +1335,25 @@ tipos_servicio_visual = [
 ]
 
 
-
-# ============================================================
-# DATOS
-# ============================================================
-
-detalle = cargar_efectividad(
-    anio
-)
-
-if detalle.empty:
-
-    st.warning(
-        (
-            "Todavía no existen resultados de "
-            "efectividad para este año."
-        )
-    )
-
-    st.stop()
-
-
-# ============================================================
-# FECHA DE CORTE
+# ------------------------------------------------------------
+# FILTRO DE COMISIÓN
 #
-# Primero calculamos esto porque los feriados y el
-# scorecard diario dependen de esta fecha.
-# ============================================================
+# La comisión ignora Preventivo / No preventivo / Todos,
+# pero respeta todos los checks globales.
+# ------------------------------------------------------------
 
-ultima_fecha_datos = max(
-    detalle[
-        "fecha_cita"
+tipos_servicio_comision = [
+    valor
+    for _, valor
+    in TODOS_TIPOS
+    if st.session_state[
+        f"cuenta_servicio_{valor}"
     ]
-)
-
-fecha_corte = min(
-    date.today(),
-    ultima_fecha_datos,
-)
-
-
-st.caption(
-    (
-        f"Fecha de corte: "
-        f"{fecha_corte:%d/%m/%Y}"
-    )
-)
+]
 
 
 # ============================================================
-# FERIADOS DEL MES ACTUAL
+# FERIADOS
 # ============================================================
 
 dias_mes_actual = pd.date_range(
@@ -1338,8 +1402,12 @@ scorecards = construir_scorecards_operativos(
     agente_a=AGENTE_ROCIO,
     agente_b=AGENTE_BRENDA,
     filtro_servicio=filtro_servicio,
-    configuracion_metas=CONFIG_METAS_2026,
-    tipos_servicio=    tipos_servicio_visual,
+    configuracion_metas=
+        CONFIG_METAS_2026,
+    tipos_servicio=
+        tipos_servicio_visual,
+    feriados=
+        feriados,
 )
 
 
@@ -1359,10 +1427,12 @@ diario_general = construir_scorecard_diario(
         CONFIG_METAS_2026,
     filtro_servicio=
         filtro_servicio,
+    tipos_servicio=
+        tipos_servicio_visual,
     feriados=
         feriados,
-    tipos_servicio=
-    tipos_servicio_visual,
+    fecha_corte=
+        fecha_corte,
 )
 
 
@@ -1377,10 +1447,12 @@ diario_rocio = construir_scorecard_diario(
         filtro_servicio,
     persona=
         AGENTE_ROCIO,
+    tipos_servicio=
+        tipos_servicio_visual,
     feriados=
         feriados,
-    tipos_servicio=
-    tipos_servicio_visual,
+    fecha_corte=
+        fecha_corte,
 )
 
 
@@ -1395,10 +1467,12 @@ diario_brenda = construir_scorecard_diario(
         filtro_servicio,
     persona=
         AGENTE_BRENDA,
+    tipos_servicio=
+        tipos_servicio_visual,
     feriados=
         feriados,
-    tipos_servicio=
-    tipos_servicio_visual,
+    fecha_corte=
+        fecha_corte,
 )
 
 
@@ -1415,19 +1489,20 @@ diario_otros = construir_scorecard_diario(
         AGENTE_ROCIO,
         AGENTE_BRENDA,
     ],
+    tipos_servicio=
+        tipos_servicio_visual,
     feriados=
         feriados,
-    tipos_servicio=
-    tipos_servicio_visual,
+    fecha_corte=
+        fecha_corte,
 )
 
 
 # ============================================================
 # COMISIONES
 #
-# IMPORTANTE:
-# calcular_comision_agente() usa internamente TODOS.
-# El filtro visual de arriba no afecta la comisión.
+# Siempre TODOS.
+# Solo cambia según los checks comerciales.
 # ============================================================
 
 comision_rocio = calcular_comision_agente(
@@ -1441,7 +1516,7 @@ comision_rocio = calcular_comision_agente(
     configuracion_incentivos=
         CONFIG_INCENTIVOS_2026,
     tipos_servicio_comision=
-    tipos_servicio_seleccionados,
+        tipos_servicio_comision,
 )
 
 
@@ -1456,7 +1531,7 @@ comision_brenda = calcular_comision_agente(
     configuracion_incentivos=
         CONFIG_INCENTIVOS_2026,
     tipos_servicio_comision=
-    tipos_servicio_seleccionados,
+        tipos_servicio_comision,
 )
 
 
@@ -1568,17 +1643,13 @@ with tab_resumen:
 
 with tab_detalle:
 
-    detalle_filtrado = detalle.copy()
-
-    if filtro_servicio != "TODOS":
-
-        detalle_filtrado = detalle_filtrado.loc[
-            detalle_filtrado[
-                "grupo_servicio"
-            ].eq(
-                filtro_servicio
-            )
-        ].copy()
+    detalle_filtrado = filtrar_detalle_scorecard(
+        detalle=detalle,
+        filtro_servicio=
+            filtro_servicio,
+        tipos_servicio=
+            tipos_servicio_visual,
+    ).copy()
 
     columnas = [
         "fecha_cita",
@@ -1594,6 +1665,13 @@ with tab_detalle:
         "confirmacion_presencia",
         "numeros_cotizacion",
         "numeros_orden",
+    ]
+
+    columnas = [
+        columna
+        for columna in columnas
+        if columna
+        in detalle_filtrado.columns
     ]
 
     st.dataframe(
@@ -1612,6 +1690,3 @@ with tab_detalle:
 with tab_revision:
 
     mostrar_revision_manual()
-
-
-
